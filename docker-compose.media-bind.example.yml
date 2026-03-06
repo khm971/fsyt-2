@@ -1,0 +1,16 @@
+# Alternative: Use a bind mount when the network share is mapped to a drive letter.
+#
+# 1. Map the share in Windows (PowerShell or net use):
+#    net use Z: \\10.50.1.250\Media\FSyt2
+#
+# 2. Copy this file to docker-compose.override.yml and set MEDIA_VOLUME:
+#    MEDIA_VOLUME=Z:/
+#
+# 3. Run: docker compose up -d
+#
+# docker-compose.override.yml is merged automatically with docker-compose.yml.
+# This overrides the media volume with a bind mount.
+services:
+  backend:
+    volumes:
+      - ${MEDIA_VOLUME:-./media}:/media

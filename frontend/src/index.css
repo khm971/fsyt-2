@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: ui-monospace, monospace;
+  @apply bg-gray-950 text-gray-200;
+}
+
+.input {
+  @apply w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500;
+}
+
+.btn-primary {
+  @apply px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium;
+}
+
+.btn-secondary {
+  @apply px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-medium;
+}

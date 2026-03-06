@@ -1,0 +1,163 @@
+"""Channel REST API."""
+from fastapi import APIRouter, HTTPException, Query
+
+from database import db
+from api.schemas import ChannelCreate, ChannelUpdate, ChannelResponse
+from log_helper import log_event, SEVERITY_INFO
+
+router = APIRouter(prefix="/channels", tags=["channels"])
+
+
+def row_to_channel(r) -> ChannelResponse:
+    return ChannelResponse(
+        channel_id=r["channel_id"],
+        provider_key=r["provider_key"],
+        record_created=r["record_created"],
+        record_updated=r["record_updated"],
+        handle=r["handle"],
+        title=r["title"],
+        url=r["url"],
+        thumbnail=r["thumbnail"],
+        banner=r["banner"],
+        author=r["author"],
+        description=r["description"],
+        is_enabled_for_auto_download=r["is_enabled_for_auto_download"] or False,
+        folder_on_disk=r["folder_on_disk"],
+        video_count=r.get("video_count"),
+        video_count_done=r.get("video_count_done"),
+    )
+
+
+@router.get("", response_model=list[ChannelResponse])
+async def list_channels(
+    sort_by: str = Query("id", pattern="^(id|title|status)$"),
+    sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+):
+    col = {
+        "id": "c.channel_id",
+        "title": "c.title",
+        "status": "(SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')",
+    }[sort_by]
+    dirn = "ASC" if sort_order == "asc" else "DESC"
+    rows = await db.fetch(
+        f"""SELECT c.channel_id, c.provider_key, c.record_created, c.record_updated,
+                  c.handle, c.title, c.url, c.thumbnail, c.banner, c.author, c.description,
+                  c.is_enabled_for_auto_download, c.folder_on_disk,
+                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE))::int AS video_count,
+                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')::int AS video_count_done
+           FROM channel c ORDER BY {col} {dirn}"""
+    )
+    return [row_to_channel(r) for r in rows]
+
+
+@router.get("/{channel_id}", response_model=ChannelResponse)
+async def get_channel(channel_id: int):
+    r = await db.fetchrow(
+        """SELECT c.channel_id, c.provider_key, c.record_created, c.record_updated,
+                  c.handle, c.title, c.url, c.thumbnail, c.banner, c.author, c.description,
+                  c.is_enabled_for_auto_download, c.folder_on_disk,
+                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE))::int AS video_count,
+                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')::int AS video_count_done
+           FROM channel c WHERE c.channel_id = $1""",
+        channel_id,
+    )
+    if not r:
+        raise HTTPException(404, "Channel not found")
+    return row_to_channel(r)
+
+
+@router.post("", response_model=ChannelResponse, status_code=201)
+async def create_channel(body: ChannelCreate):
+    row = await db.fetchrow(
+        """INSERT INTO channel (
+            provider_key, handle, title, url, thumbnail, banner, author,
+            description, is_enabled_for_auto_download, folder_on_disk
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING channel_id, provider_key, record_created, record_updated,
+                  handle, title, url, thumbnail, banner, author, description,
+                  is_enabled_for_auto_download, folder_on_disk""",
+        body.provider_key,
+        body.handle,
+        body.title,
+        body.url,
+        body.thumbnail,
+        body.banner,
+        body.author,
+        body.description,
+        body.is_enabled_for_auto_download,
+        body.folder_on_disk,
+    )
+    await log_event(f"Channel created: {body.title or body.handle or body.provider_key} (channel_id={row['channel_id']})", SEVERITY_INFO, channel_id=row["channel_id"])
+    return row_to_channel(row)
+
+
+@router.patch("/{channel_id}", response_model=ChannelResponse)
+async def update_channel(channel_id: int, body: ChannelUpdate):
+    # Build dynamic update from provided fields
+    updates = []
+    values = []
+    i = 1
+    if body.provider_key is not None:
+        updates.append(f"provider_key = ${i}")
+        values.append(body.provider_key)
+        i += 1
+    if body.handle is not None:
+        updates.append(f"handle = ${i}")
+        values.append(body.handle)
+        i += 1
+    if body.title is not None:
+        updates.append(f"title = ${i}")
+        values.append(body.title)
+        i += 1
+    if body.url is not None:
+        updates.append(f"url = ${i}")
+        values.append(body.url)
+        i += 1
+    if body.thumbnail is not None:
+        updates.append(f"thumbnail = ${i}")
+        values.append(body.thumbnail)
+        i += 1
+    if body.banner is not None:
+        updates.append(f"banner = ${i}")
+        values.append(body.banner)
+        i += 1
+    if body.author is not None:
+        updates.append(f"author = ${i}")
+        values.append(body.author)
+        i += 1
+    if body.description is not None:
+        updates.append(f"description = ${i}")
+        values.append(body.description)
+        i += 1
+    if body.is_enabled_for_auto_download is not None:
+        updates.append(f"is_enabled_for_auto_download = ${i}")
+        values.append(body.is_enabled_for_auto_download)
+        i += 1
+    if body.folder_on_disk is not None:
+        updates.append(f"folder_on_disk = ${i}")
+        values.append(body.folder_on_disk)
+        i += 1
+    if not updates:
+        return await get_channel(channel_id)
+    updates.append("record_updated = NOW()")
+    values.append(channel_id)
+    r = await db.fetchrow(
+        f"""UPDATE channel SET {", ".join(updates)}
+            WHERE channel_id = ${i}
+            RETURNING channel_id, provider_key, record_created, record_updated,
+                      handle, title, url, thumbnail, banner, author, description,
+                      is_enabled_for_auto_download, folder_on_disk""",
+        *values,
+    )
+    if not r:
+        raise HTTPException(404, "Channel not found")
+    await log_event(f"Channel updated: {r['title'] or r['handle']} (channel_id={channel_id})", SEVERITY_INFO, channel_id=channel_id)
+    return row_to_channel(r)
+
+
+@router.delete("/{channel_id}", status_code=204)
+async def delete_channel(channel_id: int):
+    r = await db.fetchrow("SELECT title, handle FROM channel WHERE channel_id = $1", channel_id)
+    await db.execute("DELETE FROM channel WHERE channel_id = $1", channel_id)
+    if r:
+        await log_event(f"Channel deleted: {r['title'] or r['handle']} (channel_id={channel_id})", SEVERITY_INFO, channel_id=channel_id)

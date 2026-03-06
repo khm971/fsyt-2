@@ -1,0 +1,35 @@
+# FlagShip YouTube: backend + frontend. PostgreSQL is external (10.50.1.250 fsyt2).
+# Override DATABASE_URL via .env if needed (e.g. host.docker.internal).
+#
+# Media storage: Set SMB_USER and SMB_PASS in .env to mount \\10.50.1.250\Media\FSyt2.
+# Alternative: Map the share to a drive letter (e.g. Z:) and set MEDIA_VOLUME=Z:\ in .env.
+services:
+  backend:
+    build: ./backend
+    image: fsyt2-backend:latest
+    container_name: fsyt2-backend
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:farstar@10.50.1.250/fsyt2}
+      - MEDIA_ROOT=/media
+    ports:
+      - "0.0.0.0:8000:8000"
+    volumes:
+      - media_files:/media
+
+  frontend:
+    build: ./frontend
+    image: fsyt2-frontend:latest
+    container_name: fsyt2-frontend
+    ports:
+      - "0.0.0.0:10200:80"
+    depends_on:
+      - backend
+
+volumes:
+  media_files:
+    driver: local
+    driver_opts:
+      type: cifs
+      # Mounts \\10.50.1.250\Media\FSyt2. If this fails, try device: "//10.50.1.250/Media" and add prefixpath=FSyt2 to the o= option.
+      device: "//10.50.1.250/Media/FSyt2"
+      o: "addr=10.50.1.250,username=${SMB_USER},password=${SMB_PASS},uid=1000,gid=1000,file_mode=0755,dir_mode=0755,vers=3.0"
