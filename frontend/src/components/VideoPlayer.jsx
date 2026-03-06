@@ -30,7 +30,6 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [videoSrc, setVideoSrc] = useState(null);
-  const [transcodeBuffering, setTranscodeBuffering] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [detailsData, setDetailsData] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -63,7 +62,7 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
     return () => { cancelled = true; };
   }, [videoId]);
 
-  // Set video source: direct URL for non-iPad; fetch+blob for iPad (Safari needs blob to avoid Range issues)
+  // Set video source: direct URL for non-iPad; HLS for iPad (Safari native HLS = progressive playback, no full buffering)
   useEffect(() => {
     if (loading) return;
     setVideoSrc(null);
@@ -75,31 +74,7 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
       setVideoSrc(api.videos.streamUrl(videoId, { transcode: false }));
       return;
     }
-    let cancelled = false;
-    (async () => {
-      setTranscodeBuffering(true);
-      try {
-        const url = api.videos.streamUrl(videoId, { transcode: true });
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(res.statusText);
-        const blob = await res.blob();
-        if (cancelled) return;
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlRef.current = blobUrl;
-        setVideoSrc(blobUrl);
-      } catch (e) {
-        if (!cancelled) setError(e.message || "Failed to load video");
-      } finally {
-        if (!cancelled) setTranscodeBuffering(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
-    };
+    setVideoSrc(api.videos.hlsUrl(videoId));
   }, [videoId, loading]);
 
   const reportProgress = useCallback((seconds, percent) => {
@@ -297,11 +272,6 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
         </div>
         <div className="flex-1 min-h-0 flex overflow-hidden">
           <div className={cn("flex-1 min-h-0 flex items-center justify-center relative", showDetails && "min-w-0")}>
-            {transcodeBuffering && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
-                <p className="text-white">Buffering video…</p>
-              </div>
-            )}
             {videoSrc && (
               <video
                 ref={videoRef}

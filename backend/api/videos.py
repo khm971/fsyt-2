@@ -2,6 +2,8 @@
 import asyncio
 import os
 import shlex
+import tempfile
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -12,6 +14,10 @@ from api.schemas import VideoCreate, VideoUpdate, VideoResponse
 from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
 
 USER_ID = 1  # No login; assume single user
+
+# HLS transcode cache: video_id -> { dir, proc, ready }
+_hls_cache: dict[int, dict] = {}
+_hls_lock = asyncio.Lock()
 
 
 class WatchProgressUpdate(BaseModel):
@@ -100,6 +106,27 @@ def _build_ffmpeg_args(full_path: str) -> list[str]:
     ]
 
 
+def _build_ffmpeg_hls_args(full_path: str, out_dir: str) -> list[str]:
+    """Build ffmpeg args for HLS output (segment-based streaming for Safari)."""
+    playlist = os.path.join(out_dir, "playlist.m3u8")
+    segment_pattern = os.path.join(out_dir, "seg_%03d.ts")
+    return [
+        "ffmpeg",
+        "-i", full_path,
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-profile:v", "baseline",
+        "-level", "3.0",
+        "-vf", "scale=-2:720",
+        "-c:a", "aac",
+        "-hls_time", "2",
+        "-hls_list_size", "0",
+        "-hls_segment_filename", segment_pattern,
+        "-f", "hls",
+        playlist,
+    ]
+
+
 async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int) -> None:
     """Read ffmpeg stderr line by line and log to event_log and console."""
     if not proc.stderr:
@@ -145,6 +172,81 @@ async def _transcode_stream(full_path: str, video_id: int):
         except ProcessLookupError:
             pass
         await stderr_task
+
+
+async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
+    """Start or reuse HLS transcode for video_id. Returns path to output directory.
+    Waits for first segment to be ready before returning."""
+    async with _hls_lock:
+        if video_id in _hls_cache:
+            entry = _hls_cache[video_id]
+            await entry["ready"].wait()
+            return entry["dir"]
+
+        out_dir = tempfile.mkdtemp(prefix="fsyt-hls-")
+        entry = {"dir": out_dir, "proc": None, "ready": asyncio.Event()}
+        _hls_cache[video_id] = entry
+
+    args = _build_ffmpeg_hls_args(full_path, out_dir)
+    cmd_str = shlex.join(args)
+    await log_event(f"[ffmpeg HLS] {cmd_str}", SEVERITY_INFO, video_id=video_id)
+    print(f"[ffmpeg HLS video_id={video_id}] command: {cmd_str}", flush=True)
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    entry["proc"] = proc
+    stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id))
+
+    async def _wait_first_segment():
+        first_seg = os.path.join(out_dir, "seg_000.ts")
+        for _ in range(60):
+            if os.path.isfile(first_seg):
+                entry["ready"].set()
+                return
+            await asyncio.sleep(0.5)
+        entry["ready"].set()
+
+    async def _wait_proc():
+        await proc.wait()
+        entry["ready"].set()
+        await stderr_task
+
+    asyncio.create_task(_wait_first_segment())
+    asyncio.create_task(_wait_proc())
+    await entry["ready"].wait()
+    return out_dir
+
+
+@router.get("/{video_id}/hls/{path:path}")
+async def serve_hls(video_id: int, path: str):
+    """Serve HLS playlist and segments. Starts transcode on first request.
+    Use playlist.m3u8 as the video src for Safari (native HLS support)."""
+    r = await db.fetchrow(
+        "SELECT file_path, status FROM video WHERE video_id = $1",
+        video_id,
+    )
+    if not r:
+        raise HTTPException(404, "Video not found")
+    if r["status"] != "available":
+        raise HTTPException(400, "Video is not ready to play")
+    file_path = r.get("file_path")
+    if not file_path:
+        raise HTTPException(404, "Video file not found")
+    root = get_media_root()
+    full_path = os.path.join(root, file_path.replace("\\", "/"))
+    if not os.path.isfile(full_path):
+        raise HTTPException(404, "Video file not found on disk")
+
+    out_dir = await _ensure_hls_transcode(video_id, full_path)
+    file_path_resolved = os.path.normpath(os.path.join(out_dir, path))
+    if not file_path_resolved.startswith(out_dir):
+        raise HTTPException(400, "Invalid path")
+    if not os.path.isfile(file_path_resolved):
+        raise HTTPException(404, "Segment not ready")
+    media_type = "application/vnd.apple.mpegurl" if path.endswith(".m3u8") else "video/MP2T"
+    return FileResponse(file_path_resolved, media_type=media_type)
 
 
 @router.get("/{video_id}/stream")

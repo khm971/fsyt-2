@@ -58,6 +58,7 @@ export const api = {
       if (options.transcode) return `${base}?transcode=1`;
       return base;
     },
+    hlsUrl: (id) => `${API.replace(/\/$/, "")}/videos/${id}/hls/playlist.m3u8`,
     getWatchProgress: (id) => apiFetch(`/videos/${id}/watch-progress`),
     updateWatchProgress: (id, progressSeconds, progressPercent) =>
       apiFetch(`/videos/${id}/watch-progress`, {
