@@ -19,6 +19,21 @@ export function formatDateTime(isoString) {
   });
 }
 
+/** Full date/time with seconds (e.g. "Mar 5, 2025, 3:45:32 PM"). */
+export function formatDateTimeWithSeconds(isoString) {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
 /** Today: time only (e.g. "3:45 PM"). Otherwise: date (e.g. "Dec 3" or "Dec 3, 2024"). */
 export function formatSmartTime(isoString) {
   const d = new Date(isoString);

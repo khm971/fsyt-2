@@ -8,16 +8,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import db
 from run_migrations import run_migrations
-from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO
+from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE
 from job_processor import run_job_loop, broadcast_queue_update
 from websocket_manager import ws_manager
 from video_progress_bridge import drain as drain_video_progress
 from api.channels import router as channels_router
-from api.videos import router as videos_router, _save_watch_progress
+from api.videos import router as videos_router, _save_watch_progress, get_active_transcodes
 from api.queue import router as queue_router
 from api.control import router as control_router
 from api.charged_errors import router as charged_errors_router
 from api.log import router as log_router
+from api.maintenance import router as maintenance_router
+from api.status import router as status_router
 
 
 async def _drain_video_progress_loop():
@@ -36,6 +38,18 @@ async def _drain_video_progress_loop():
         await asyncio.sleep(0.2)
 
 
+async def _transcode_progress_broadcast_loop():
+    """Broadcast transcode progress to WebSocket clients while transcodes are active."""
+    while True:
+        try:
+            transcodes = await get_active_transcodes()
+            if transcodes:
+                await ws_manager.broadcast({"type": "transcode_progress", "transcodes": transcodes})
+        except Exception:
+            pass
+        await asyncio.sleep(1.5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
@@ -47,17 +61,24 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(run_job_loop())
     await log_event("Starting video progress drain loop", SEVERITY_DEBUG)
     progress_task = asyncio.create_task(_drain_video_progress_loop())
+    transcode_task = asyncio.create_task(_transcode_progress_broadcast_loop())
+    await log_event("System startup complete", SEVERITY_NOTICE)
     try:
         yield
     finally:
         task.cancel()
         progress_task.cancel()
+        transcode_task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
         try:
             await progress_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await transcode_task
         except asyncio.CancelledError:
             pass
         await db.disconnect()
@@ -79,6 +100,8 @@ app.include_router(queue_router, prefix="/api")
 app.include_router(control_router, prefix="/api")
 app.include_router(charged_errors_router, prefix="/api")
 app.include_router(log_router, prefix="/api")
+app.include_router(maintenance_router, prefix="/api")
+app.include_router(status_router, prefix="/api")
 
 
 @app.get("/health")

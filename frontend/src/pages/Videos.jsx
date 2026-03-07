@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { cn } from "../lib/utils";
-import { Plus, Trash2, Download, FileSearch, EyeOff, Eye, Play, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Plus, Trash2, Download, FileSearch, EyeOff, Eye, Play, ArrowUp, ArrowDown, ArrowUpDown, Film } from "lucide-react";
 
 const STATUS_LABELS = {
   available: "Available",
@@ -239,15 +239,24 @@ export default function Videos({ setError }) {
                 </td>
                 <td className="px-4 py-2 min-w-[140px]">
                   <div className="flex flex-col gap-0.5">
-                    <span className={cn(
-                      status === "available" && "text-green-400",
-                      (status === "running" || status === "downloading" || status === "getting_metadata" || status === "get_metadata_for_download" || status === "post_download_processing" || status === "llm_processing") && "text-blue-400",
-                      status === "error" && "text-red-400",
-                      status && status.startsWith("error") && "text-red-400",
-                      !status && "text-gray-500"
-                    )}>
-                      {formatStatus(status)}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={cn(
+                        status === "available" && "text-green-400",
+                        (status === "running" || status === "downloading" || status === "getting_metadata" || status === "get_metadata_for_download" || status === "post_download_processing" || status === "llm_processing") && "text-blue-400",
+                        status === "error" && "text-red-400",
+                        status && status.startsWith("error") && "text-red-400",
+                        !status && "text-gray-500"
+                      )}>
+                        {formatStatus(status)}
+                      </span>
+                      {v.transcode_path && (
+                        <Tooltip title="Transcode Exists">
+                          <span className="inline-flex text-gray-400 shrink-0">
+                            <Film className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
+                    </div>
                     {showProgress && (
                       <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
                         <div

@@ -94,11 +94,18 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
     const video = videoRef.current;
     if (!video || loading || !videoSrc) return;
 
+    const getValidDuration = () => {
+      const d = video.duration;
+      if (typeof d === "number" && d > 0 && Number.isFinite(d)) return d;
+      return duration != null && duration > 0 ? duration : null;
+    };
+
     const setInitialTime = () => {
       if (startTime > 0) {
         video.currentTime = startTime;
-        if (video.duration > 0) {
-          setLiveProgress({ seconds: Math.floor(startTime), percent: (startTime / video.duration) * 100 });
+        const dur = getValidDuration();
+        if (dur != null) {
+          setLiveProgress({ seconds: Math.floor(startTime), percent: (startTime / dur) * 100 });
         }
       }
     };
@@ -108,28 +115,28 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
 
     const onTimeUpdate = () => {
       const sec = video.currentTime;
-      const dur = video.duration;
-      if (dur > 0) {
+      const dur = getValidDuration();
+      if (dur != null) {
         setLiveProgress({ seconds: Math.floor(sec), percent: (sec / dur) * 100 });
       }
     };
 
     const onEnded = () => {
-      const dur = video.duration || duration;
-      if (dur > 0) reportProgress(Math.floor(dur), 100);
+      const dur = getValidDuration();
+      if (dur != null) reportProgress(Math.floor(dur), 100);
     };
 
     const onPlay = () => {
       const sec = video.currentTime;
-      const dur = video.duration;
-      if (dur > 0) reportProgress(sec, (sec / dur) * 100);
+      const dur = getValidDuration();
+      if (dur != null) reportProgress(sec, (sec / dur) * 100);
     };
 
     progressIntervalRef.current = setInterval(() => {
       if (video.paused) return;
       const sec = video.currentTime;
-      const dur = video.duration;
-      if (dur > 0) reportProgress(sec, (sec / dur) * 100);
+      const dur = getValidDuration();
+      if (dur != null) reportProgress(sec, (sec / dur) * 100);
     }, PROGRESS_INTERVAL_MS);
 
     video.addEventListener("timeupdate", onTimeUpdate);

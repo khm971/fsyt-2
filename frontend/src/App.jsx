@@ -1,7 +1,14 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { cn } from "./lib/utils";
-import { LayoutDashboard, Video, Radio, ListOrdered, ScrollText } from "lucide-react";
+import {
+  LayoutDashboard,
+  Video,
+  Radio,
+  ListOrdered,
+  ScrollText,
+  Settings2,
+} from "lucide-react";
 import { useQueueWebSocket } from "./context/QueueWebSocketContext";
 import { ToastProvider } from "./context/ToastContext";
 import Dashboard from "./pages/Dashboard";
@@ -9,6 +16,7 @@ import Channels from "./pages/Channels";
 import Videos from "./pages/Videos";
 import Queue from "./pages/Queue";
 import Log from "./pages/Log";
+import Admin from "./pages/Admin";
 
 function Nav() {
   const linkClass = ({ isActive }) =>
@@ -40,6 +48,10 @@ function Nav() {
       <NavLink to="/log" className={linkClass}>
         <ScrollText className="w-4 h-4" />
         Log
+      </NavLink>
+      <NavLink to="/admin" className={linkClass}>
+        <Settings2 className="w-4 h-4" />
+        Admin
       </NavLink>
     </nav>
   );
@@ -90,6 +102,7 @@ export default function App() {
             <Route path="/videos" element={<Videos setError={setError} />} />
             <Route path="/queue" element={<Queue setError={setError} />} />
             <Route path="/log" element={<Log setError={setError} />} />
+            <Route path="/admin/*" element={<Admin setError={setError} />} />
           </Routes>
         </main>
       </div>

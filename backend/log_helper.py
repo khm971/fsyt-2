@@ -1,8 +1,11 @@
 """Async helper to write important events to the event_log table."""
 from database import db
+from websocket_manager import ws_manager
 
+SEVERITY_LOW_LEVEL = 5
 SEVERITY_DEBUG = 10
 SEVERITY_INFO = 20
+SEVERITY_NOTICE = 25
 SEVERITY_WARNING = 30
 SEVERITY_ERROR = 40
 SEVERITY_CRITICAL = 50
@@ -26,5 +29,10 @@ async def log_event(
             video_id,
             channel_id,
         )
+        if severity >= SEVERITY_INFO:
+            try:
+                await ws_manager.broadcast({"type": "log_event"})
+            except Exception:
+                pass
     except Exception:
         pass  # Don't let logging failures break the app

@@ -90,6 +90,15 @@ export const api = {
     set: (key, value) => apiFetch(`/control/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify({ value }) }),
   },
 
+  status: {
+    get: () => apiFetch("/status"),
+  },
+
+  maintenance: {
+    clearTranscodes: () => apiFetch("/maintenance/clear-transcodes", { method: "POST" }),
+    clearWatchHistory: () => apiFetch("/maintenance/clear-watch-history", { method: "POST" }),
+  },
+
   chargedErrors: {
     list: (params = {}) => {
       const q = new URLSearchParams();
@@ -107,6 +116,7 @@ export const api = {
       if (params.limit != null) q.set("limit", params.limit);
       if (params.offset != null) q.set("offset", params.offset);
       if (params.video_id != null) q.set("video_id", params.video_id);
+      if (params.min_severity != null) q.set("min_severity", params.min_severity);
       const query = q.toString();
       return apiFetch(`/log${query ? `?${query}` : ""}`);
     },
@@ -115,6 +125,7 @@ export const api = {
       const q = new URLSearchParams();
       if (params.limit != null) q.set("limit", params.limit);
       if (params.video_id != null) q.set("video_id", params.video_id);
+      if (params.min_severity != null) q.set("min_severity", params.min_severity);
       const query = q.toString();
       return apiFetch(`/log/recent${query ? `?${query}` : ""}`);
     },

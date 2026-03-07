@@ -1,8 +1,9 @@
 """Video REST API."""
 import asyncio
+import math
 import os
 import shlex
-import tempfile
+import shutil
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -11,7 +12,7 @@ from database import db
 from services.tools import get_media_root
 from pydantic import BaseModel
 from api.schemas import VideoCreate, VideoUpdate, VideoResponse
-from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
+from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
 
 USER_ID = 1  # No login; assume single user
 
@@ -25,7 +26,7 @@ class WatchProgressUpdate(BaseModel):
     progress_percent: float
 from parse_video_id import parse_youtube_video_id
 import db_helpers
-from job_processor import broadcast_queue_update
+from job_processor import broadcast_queue_update, broadcast_transcode_status_changed
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -41,6 +42,7 @@ def row_to_video(r) -> VideoResponse:
         llm_description_1=r["llm_description_1"],
         thumbnail=r["thumbnail"],
         file_path=r["file_path"],
+        transcode_path=r.get("transcode_path"),
         download_date=r["download_date"],
         duration=r["duration"],
         record_created=r["record_created"],
@@ -65,7 +67,7 @@ async def list_videos(
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
-                  v.llm_description_1, v.thumbnail, v.file_path, v.download_date, v.duration,
+                  v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, v.status_percent_complete, v.priority,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished
@@ -139,9 +141,10 @@ async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int) 
             text = line.decode("utf-8", errors="replace").rstrip()
             if not text:
                 continue
-            severity = SEVERITY_ERROR if "error" in text.lower() else SEVERITY_DEBUG
+            severity = SEVERITY_ERROR if "error" in text.lower() else SEVERITY_LOW_LEVEL
             await log_event(f"[ffmpeg] {text}", severity, video_id=video_id)
-            print(f"[ffmpeg video_id={video_id}] {text}", flush=True)
+            if severity != SEVERITY_LOW_LEVEL:
+                print(f"[ffmpeg video_id={video_id}] {text}", flush=True)
     except Exception as e:
         await log_event(f"[ffmpeg stderr read error] {e}", SEVERITY_WARNING, video_id=video_id)
         print(f"[ffmpeg video_id={video_id}] stderr read error: {e}", flush=True)
@@ -174,16 +177,96 @@ async def _transcode_stream(full_path: str, video_id: int):
         await stderr_task
 
 
+def _get_transcode_dir(video_id: int) -> tuple[str, str]:
+    """Return (full_path, relative_path) for video transcode. Relative path is stored in DB."""
+    root = get_media_root().rstrip("/")
+    rel_path = f"_transcodes/{video_id}"
+    full_path = os.path.join(root, rel_path.replace("/", os.sep))
+    return full_path, rel_path
+
+
+async def clear_all_hls_transcodes() -> dict[str, int]:
+    """Delete persisted HLS transcodes and clear their DB references."""
+    media_root = os.path.abspath(get_media_root())
+    transcodes_dir = os.path.abspath(os.path.join(media_root, "_transcodes"))
+    if os.path.commonpath([media_root, transcodes_dir]) != media_root:
+        raise RuntimeError("Resolved transcode path is outside MEDIA_ROOT")
+
+    await log_event(
+        f"Maintenance: clearing all transcodes under {transcodes_dir}",
+        SEVERITY_INFO,
+    )
+
+    async with _hls_lock:
+        cache_entries = list(_hls_cache.values())
+        _hls_cache.clear()
+
+    stopped_processes = 0
+    for entry in cache_entries:
+        proc = entry.get("proc")
+        if proc and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+            stopped_processes += 1
+
+    deleted_entries = 0
+    if os.path.isdir(transcodes_dir):
+        with os.scandir(transcodes_dir) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    shutil.rmtree(entry.path)
+                else:
+                    os.unlink(entry.path)
+                deleted_entries += 1
+    os.makedirs(transcodes_dir, exist_ok=True)
+
+    updated_videos = await db.fetchval(
+        "SELECT COUNT(*) FROM video WHERE transcode_path IS NOT NULL"
+    )
+    await db.execute("UPDATE video SET transcode_path = NULL WHERE transcode_path IS NOT NULL")
+
+    await log_event(
+        f"Maintenance: cleared all transcodes (deleted {deleted_entries} entries, reset {updated_videos} videos, stopped {stopped_processes} active transcodes)",
+        SEVERITY_INFO,
+    )
+    return {
+        "deleted_entries": int(deleted_entries or 0),
+        "updated_videos": int(updated_videos or 0),
+        "stopped_processes": int(stopped_processes or 0),
+    }
+
+
 async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
-    """Start or reuse HLS transcode for video_id. Returns path to output directory.
-    Waits for first segment to be ready before returning."""
+    """Start or reuse HLS transcode for video_id. Returns full path to output directory.
+    Persists transcode_path to DB. Uses /media/_transcodes/{video_id}."""
+    out_dir, rel_path = _get_transcode_dir(video_id)
+
     async with _hls_lock:
         if video_id in _hls_cache:
             entry = _hls_cache[video_id]
             await entry["ready"].wait()
             return entry["dir"]
 
-        out_dir = tempfile.mkdtemp(prefix="fsyt-hls-")
+        # Check for existing persisted transcode
+        r = await db.fetchrow(
+            "SELECT transcode_path FROM video WHERE video_id = $1",
+            video_id,
+        )
+        if r and r.get("transcode_path"):
+            existing_dir = os.path.join(get_media_root().rstrip("/"), r["transcode_path"].replace("/", os.sep))
+            playlist = os.path.join(existing_dir, "playlist.m3u8")
+            if os.path.isfile(playlist):
+                _hls_cache[video_id] = {"dir": existing_dir, "proc": None, "ready": asyncio.Event()}
+                _hls_cache[video_id]["ready"].set()
+                return existing_dir
+
+        os.makedirs(out_dir, exist_ok=True)
         entry = {"dir": out_dir, "proc": None, "ready": asyncio.Event()}
         _hls_cache[video_id] = entry
 
@@ -198,6 +281,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
     )
     entry["proc"] = proc
     stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id))
+    await broadcast_transcode_status_changed()
 
     async def _wait_first_segment():
         first_seg = os.path.join(out_dir, "seg_000.ts")
@@ -209,14 +293,76 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
         entry["ready"].set()
 
     async def _wait_proc():
-        await proc.wait()
+        exit_code = await proc.wait()
         entry["ready"].set()
         await stderr_task
+        if exit_code == 0:
+            await db.execute(
+                "UPDATE video SET transcode_path = $1 WHERE video_id = $2",
+                rel_path,
+                video_id,
+            )
+            await log_event(f"[ffmpeg HLS] transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id)
+        else:
+            await log_event(f"[ffmpeg HLS] transcode failed (exit {exit_code}), not persisted", SEVERITY_WARNING, video_id=video_id)
+        await broadcast_transcode_status_changed()
 
     asyncio.create_task(_wait_first_segment())
     asyncio.create_task(_wait_proc())
     await entry["ready"].wait()
     return out_dir
+
+
+HLS_SEGMENT_SECONDS = 2
+
+
+async def get_active_transcodes() -> list[dict]:
+    """Return list of actively running transcodes: { video_id, segment_count, total_segments, percent_complete }."""
+    active_ids = []
+    entries_by_id = {}
+    async with _hls_lock:
+        for video_id, entry in list(_hls_cache.items()):
+            proc = entry.get("proc")
+            if proc is None or proc.returncode is not None:
+                continue
+            active_ids.append(video_id)
+            entries_by_id[video_id] = entry
+
+    if not active_ids:
+        return []
+
+    durations = {}
+    if active_ids:
+        rows = await db.fetch(
+            "SELECT video_id, duration FROM video WHERE video_id = ANY($1)",
+            active_ids,
+        )
+        durations = {r["video_id"]: r.get("duration") for r in rows}
+
+    result = []
+    for video_id in active_ids:
+        entry = entries_by_id.get(video_id)
+        out_dir = entry.get("dir") if entry else None
+        segment_count = None
+        if out_dir and os.path.isdir(out_dir):
+            try:
+                segment_count = sum(1 for f in os.listdir(out_dir) if f.startswith("seg_") and f.endswith(".ts"))
+            except OSError:
+                pass
+
+        duration = durations.get(video_id)
+        total_segments = math.ceil(duration / HLS_SEGMENT_SECONDS) if duration and duration > 0 else None
+        percent_complete = None
+        if segment_count is not None and total_segments is not None and total_segments > 0:
+            percent_complete = min(100, round((segment_count / total_segments) * 100))
+
+        result.append({
+            "video_id": video_id,
+            "segment_count": segment_count,
+            "total_segments": total_segments,
+            "percent_complete": percent_complete,
+        })
+    return result
 
 
 @router.get("/{video_id}/hls/{path:path}")
@@ -333,7 +479,7 @@ async def update_watch_progress(video_id: int, body: WatchProgressUpdate):
 async def get_video(video_id: int):
     r = await db.fetchrow(
         """SELECT video_id, provider_key, channel_id, title, upload_date, description,
-                  llm_description_1, thumbnail, file_path, download_date, duration,
+                  llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
                   record_created, status, status_percent_complete, priority,
                   status_message, is_ignore, metadata_last_updated, nfo_last_written
            FROM video WHERE video_id = $1""",
@@ -364,7 +510,7 @@ async def create_video(body: VideoCreate):
         """INSERT INTO video (provider_key, channel_id, status)
            VALUES ($1, $2, 'no_metadata')
            RETURNING video_id, provider_key, channel_id, title, upload_date, description,
-                     llm_description_1, thumbnail, file_path, download_date, duration,
+                     llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
                      record_created, status, status_percent_complete, priority,
                      status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         provider_key,
@@ -404,7 +550,7 @@ async def update_video(video_id: int, body: VideoUpdate):
     r = await db.fetchrow(
         f"""UPDATE video SET {", ".join(updates)} WHERE video_id = ${i}
             RETURNING video_id, provider_key, channel_id, title, upload_date, description,
-                      llm_description_1, thumbnail, file_path, download_date, duration,
+                      llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
                       record_created, status, status_percent_complete, priority,
                       status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         *values,

@@ -5,8 +5,10 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 
 const PAGE_SIZE = 50;
 const SEVERITY_COLORS = {
+  5: "text-gray-500",
   10: "text-gray-400",
   20: "text-blue-400",
+  25: "text-cyan-400",
   30: "text-yellow-400",
   40: "text-red-400",
   50: "text-red-600 font-semibold",
@@ -17,13 +19,18 @@ export default function Log({ setError }) {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(0);
   const [ackingId, setAckingId] = useState(null);
+  const [showLowLevel, setShowLowLevel] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       try {
-        const res = await api.log.list({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+        const res = await api.log.list({
+          limit: PAGE_SIZE,
+          offset: page * PAGE_SIZE,
+          min_severity: showLowLevel ? undefined : 10,
+        });
         if (cancelled) return;
         setData(res);
       } catch (e) {
@@ -34,7 +41,7 @@ export default function Log({ setError }) {
     }
     load();
     return () => { cancelled = true; };
-  }, [setError, page]);
+  }, [setError, page, showLowLevel]);
 
   const handleAck = async (eventLogId) => {
     setAckingId(eventLogId);
@@ -61,9 +68,25 @@ export default function Log({ setError }) {
     return <div className="text-gray-400 py-8">Loading...</div>;
   }
 
+  const handleShowLowLevelChange = (checked) => {
+    setShowLowLevel(checked);
+    setPage(0);
+  };
+
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-white">Event log</h2>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h2 className="text-xl font-semibold text-white">Event log</h2>
+        <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showLowLevel}
+            onChange={(e) => handleShowLowLevelChange(e.target.checked)}
+            className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500"
+          />
+          Include low-level messages
+        </label>
+      </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
@@ -96,8 +119,10 @@ export default function Log({ setError }) {
                   </td>
                   <td className="px-4 py-2">
                     <span className={cn(SEVERITY_COLORS[e.severity] ?? "text-gray-300")}>
+                      {e.severity === 5 && "Low"}
                       {e.severity === 10 && "Debug"}
                       {e.severity === 20 && "Info"}
+                      {e.severity === 25 && "Notice"}
                       {e.severity === 30 && "Warning"}
                       {e.severity === 40 && "Error"}
                       {e.severity === 50 && "Critical"}
@@ -128,7 +153,9 @@ export default function Log({ setError }) {
 
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800 text-gray-400 text-sm">
           <span>
-            Showing {data.offset + 1}–{Math.min(data.offset + data.entries.length, data.total)} of {data.total}
+            {data.entries.length === 0
+              ? `Showing 0 of ${data.total}`
+              : `Showing ${data.offset + 1}–${data.offset + data.entries.length} of ${data.total}`}
           </span>
           <div className="flex items-center gap-2">
             <button

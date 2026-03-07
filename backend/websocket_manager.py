@@ -19,6 +19,10 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket) -> None:
         self._connections.discard(websocket)
 
+    async def connection_count(self) -> int:
+        async with self._lock:
+            return len(self._connections)
+
     async def broadcast(self, message: dict) -> None:
         if not self._connections:
             return

@@ -10,6 +10,9 @@ export function QueueWebSocketProvider({ children }) {
   const [status, setStatus] = useState("connecting");
   const [videoUpdatedAt, setVideoUpdatedAt] = useState(0);
   const [queueUpdatedAt, setQueueUpdatedAt] = useState(0);
+  const [logUpdatedAt, setLogUpdatedAt] = useState(0);
+  const [transcodeStatusChangedAt, setTranscodeStatusChangedAt] = useState(0);
+  const [transcodeProgress, setTranscodeProgress] = useState(null);
   const [videoProgressOverrides, setVideoProgressOverrides] = useState({});
   const [reconnectedAt, setReconnectedAt] = useState(0);
   const wsRef = useRef(null);
@@ -52,6 +55,16 @@ export function QueueWebSocketProvider({ children }) {
           setJobs(msg.jobs);
           setQueueUpdatedAt(Date.now());
         }
+        if (msg.type === "log_event") {
+          setLogUpdatedAt(Date.now());
+        }
+        if (msg.type === "transcode_status_changed") {
+          setTranscodeStatusChangedAt(Date.now());
+          setTranscodeProgress(null);
+        }
+        if (msg.type === "transcode_progress" && Array.isArray(msg.transcodes)) {
+          setTranscodeProgress(msg.transcodes);
+        }
         if (msg.type === "video_updated") {
           setVideoUpdatedAt(Date.now());
           setVideoProgressOverrides((prev) => {
@@ -87,6 +100,9 @@ export function QueueWebSocketProvider({ children }) {
     status,
     videoUpdatedAt,
     queueUpdatedAt,
+    logUpdatedAt,
+    transcodeStatusChangedAt,
+    transcodeProgress,
     videoProgressOverrides,
     reconnectedAt,
     send,

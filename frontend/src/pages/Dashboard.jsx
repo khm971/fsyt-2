@@ -2,51 +2,35 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
-import { cn, formatSmartTime, formatDateTime } from "../lib/utils";
-import { Activity, ScrollText } from "lucide-react";
-
-function isBoolean(val) {
-  return val === "true" || val === "false";
-}
-
-function isNumeric(val) {
-  if (val == null || val === "") return false;
-  return /^-?\d+(\.\d+)?$/.test(String(val).trim());
-}
-
-function isDatestamp(val) {
-  if (val == null || val === "") return false;
-  const d = new Date(val);
-  return !Number.isNaN(d.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(String(val));
-}
-
-function formatKey(key) {
-  return key
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
+import { cn, formatSmartTime, formatDateTime, formatDateTimeWithSeconds } from "../lib/utils";
+import { Activity, Film, ScrollText, Users } from "lucide-react";
 
 const SEVERITY_COLORS = {
+  5: "text-gray-500",
   10: "text-gray-400",
   20: "text-blue-400",
+  25: "text-cyan-400",
   30: "text-yellow-400",
   40: "text-red-400",
   50: "text-red-600 font-semibold",
 };
 
+
 export default function Dashboard({ setError }) {
   const [control, setControl] = useState({});
   const [logEntries, setLogEntries] = useState([]);
+  const [statusData, setStatusData] = useState({ transcodes: [], websocket_connections: 0 });
   const [loading, setLoading] = useState(true);
-  const { jobs, status: wsStatus, queueUpdatedAt } = useQueueWebSocket();
+  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress } = useQueueWebSocket();
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const [list, recent] = await Promise.all([
+        const [list, recent, status] = await Promise.all([
           api.control.list(),
-          api.log.recent(10),
+          api.log.recent({ limit: 10, min_severity: 20 }),
+          api.status.get(),
         ]);
         if (cancelled) return;
         const map = {};
@@ -55,6 +39,7 @@ export default function Dashboard({ setError }) {
         });
         setControl(map);
         setLogEntries(recent);
+        setStatusData(status);
       } catch (e) {
         if (!cancelled) setError(e.message);
       } finally {
@@ -63,40 +48,9 @@ export default function Dashboard({ setError }) {
     }
     load();
     return () => { cancelled = true; };
-  }, [setError, queueUpdatedAt]);
+  }, [setError, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt]);
 
-  const [savingKey, setSavingKey] = useState(null);
-  const [editValues, setEditValues] = useState({});
-
-  const handleControlChange = (key, newValue) => {
-    setEditValues((prev) => ({ ...prev, [key]: newValue }));
-  };
-
-  const handleControlSave = async (key) => {
-    const c = control[key];
-    const displayVal = editValues[key] !== undefined ? editValues[key] : c?.value;
-    const strVal =
-      typeof displayVal === "boolean"
-        ? String(displayVal)
-        : String(displayVal ?? "");
-    setSavingKey(key);
-    try {
-      await api.control.set(key, strVal);
-      setControl((prev) => ({
-        ...prev,
-        [key]: { ...prev[key], value: strVal, last_update: new Date().toISOString() },
-      }));
-      setEditValues((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setSavingKey(null);
-    }
-  };
+  const transcodes = transcodeProgress ?? statusData.transcodes ?? [];
 
   const handleAck = async (eventLogId) => {
     try {
@@ -182,94 +136,48 @@ export default function Dashboard({ setError }) {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <div className="text-gray-400 text-sm mb-1">Last heartbeat</div>
           <div className="text-white text-sm font-mono">
-            {heartbeat ? new Date(heartbeat).toLocaleString() : "—"}
+            {formatDateTimeWithSeconds(heartbeat)}
           </div>
         </div>
-      </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-        <h3 className="text-sm font-medium text-gray-400 mb-3">Control values</h3>
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2 py-1 border-b border-gray-800 text-gray-500 text-xs">
-            <div className="w-48 shrink-0">Key</div>
-            <div className="flex-1 min-w-0">Value</div>
-            <div className="w-36 shrink-0">Updated</div>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+            <Film className="w-4 h-4" />
+            Transcodes
           </div>
-          {Object.entries(control).map(([key, c]) => {
-            const val = c?.value ?? "";
-            const displayVal = editValues[key] !== undefined ? editValues[key] : val;
-            const readOnly = isDatestamp(val);
-            const isBool = isBoolean(val);
-            const isNum = isNumeric(val);
-
-            return (
-              <div
-                key={key}
-                className="flex flex-wrap items-center gap-2 py-2 border-b border-gray-800 last:border-0"
-              >
-                <div className="w-48 shrink-0">
-                  <span className="text-gray-400 text-sm">{formatKey(key)}</span>
-                </div>
-                <div className="flex-1 min-w-0 flex items-center gap-2">
-                  {readOnly ? (
-                    <span className="text-gray-300 text-sm font-mono">
-                      {formatDateTime(val)}
-                    </span>
-                  ) : isBool ? (
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={displayVal === "true"}
-                        onChange={(e) =>
-                          handleControlChange(key, e.target.checked ? "true" : "false")
-                        }
-                        className="sr-only peer"
-                      />
-                      <div className="w-9 h-5 bg-gray-700 rounded-full peer peer-checked:bg-blue-600 peer-focus:ring-2 peer-focus:ring-blue-500/50" />
-                      <div className="absolute left-0.5 top-1 bg-white w-3.5 h-3.5 rounded-full transition-all peer-checked:translate-x-4" />
-                    </label>
-                  ) : isNum ? (
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9.-]*"
-                      value={displayVal}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === "" || /^-?\d*\.?\d*$/.test(v))
-                          handleControlChange(key, v);
-                      }}
-                      onBlur={() => handleControlSave(key)}
-                      onKeyDown={(e) => e.key === "Enter" && handleControlSave(key)}
-                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono w-24 focus:border-blue-500 focus:outline-none"
-                    />
-                  ) : (
-                    <input
-                      type="text"
-                      value={displayVal}
-                      onChange={(e) => handleControlChange(key, e.target.value)}
-                      onBlur={() => handleControlSave(key)}
-                      onKeyDown={(e) => e.key === "Enter" && handleControlSave(key)}
-                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white flex-1 min-w-0 focus:border-blue-500 focus:outline-none"
-                    />
-                  )}
-                  {!readOnly && (editValues[key] !== undefined || (isBool && displayVal !== val)) && (
-                    <button
-                      type="button"
-                      onClick={() => handleControlSave(key)}
-                      disabled={savingKey === key}
-                      className="text-blue-400 hover:text-blue-300 text-xs disabled:opacity-50 shrink-0"
-                    >
-                      {savingKey === key ? "..." : "Save"}
-                    </button>
-                  )}
-                </div>
-                <div className="text-gray-500 text-xs shrink-0 w-36">
-                  {c?.last_update ? formatDateTime(c.last_update) : "—"}
+          <div className="text-white text-sm">
+            {!transcodes || transcodes.length === 0 ? (
+              "No transcodes running"
+            ) : (
+              <div className="space-y-1">
+                <span>{transcodes.length} running</span>
+                <div className="text-gray-300 font-mono text-xs">
+                  {transcodes.map((t) => (
+                    <div key={t.video_id}>
+                      Video {t.video_id}
+                      {t.segment_count != null && (
+                        <span className="text-gray-500 ml-1">
+                          ({t.segment_count}
+                          {t.total_segments != null ? ` / ${t.total_segments}` : ""} segments
+                          {t.percent_complete != null && `, ${t.percent_complete}%`})
+                        </span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
-            );
-          })}
+            )}
+          </div>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+            <Users className="w-4 h-4" />
+            WebSocket connections
+          </div>
+          <div className="text-white">
+            {statusData.websocket_connections ?? 0}
+          </div>
         </div>
       </div>
 
@@ -312,7 +220,7 @@ export default function Dashboard({ setError }) {
                   </button>
                 )}
               </div>
-            ))
+              ))
           )}
         </div>
       </div>

@@ -48,6 +48,7 @@ class VideoBase(BaseModel):
     llm_description_1: Optional[str] = None
     thumbnail: Optional[str] = None
     file_path: Optional[str] = None
+    transcode_path: Optional[str] = None
     download_date: Optional[datetime] = None
     duration: Optional[int] = None
     status: Optional[str] = None

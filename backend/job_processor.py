@@ -35,7 +35,7 @@ async def run_job_loop() -> None:
                 continue
             await db.execute(
                 "UPDATE control SET value = $1, last_update = NOW() WHERE key = 'server_heartbeat'",
-                datetime.utcnow().isoformat(),
+                datetime.now().isoformat(),
             )
             row = await db.fetchrow(
                 """SELECT job_queue_id, job_type, video_id, channel_id, parameter
@@ -349,6 +349,11 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
 async def broadcast_video_updated(video_id: int) -> None:
     """Notify connected clients that a video's status changed so they can refetch."""
     await ws_manager.broadcast({"type": "video_updated", "video_id": video_id})
+
+
+async def broadcast_transcode_status_changed() -> None:
+    """Notify connected clients that active transcodes changed so dashboard can refetch."""
+    await ws_manager.broadcast({"type": "transcode_status_changed"})
 
 
 async def broadcast_queue_update() -> None:
