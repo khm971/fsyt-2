@@ -26,13 +26,27 @@ def get_conn():
         conn.close()
 
 
-def update_video_download_progress_sync(video_id: int, status: str, percent: int = 0, message: str = None):
+def update_job_progress_sync(job_id: int, status: str, percent: int = 0, message: str = None):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE video SET status = %s, status_percent_complete = %s, status_message = %s WHERE video_id = %s""",
-                (status, percent, message, video_id),
+                """UPDATE job_queue SET status = %s, status_percent_complete = %s, status_message = %s, last_update = NOW() WHERE job_queue_id = %s""",
+                (status, percent, message, job_id),
             )
+
+
+def update_video_download_progress_sync(video_id: int, status: str, percent: int = 0, message: str = None, job_id: int | None = None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE video SET status = %s, status_message = %s WHERE video_id = %s""",
+                (status, message, video_id),
+            )
+            if job_id is not None:
+                cur.execute(
+                    """UPDATE job_queue SET status = %s, status_percent_complete = %s, status_message = %s, last_update = NOW() WHERE job_queue_id = %s""",
+                    (status, percent, message, job_id),
+                )
 
 
 def update_video_metadata_sync(video_id: int, title: str, upload_date, description: str, thumbnail: str):
@@ -57,7 +71,7 @@ def update_video_download_info_sync(video_id: int, file_path: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available', status_percent_complete = 100 WHERE video_id = %s""",
+                """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available' WHERE video_id = %s""",
                 (file_path.replace("\\", "/"), video_id),
             )
 

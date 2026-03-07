@@ -37,11 +37,11 @@ def download_video_sync(
         msg = f"{prefix}video {video_id}: getting metadata"
         _log(job_id, video_id, channel_id, msg)
         print(f"[Download] video_id={video_id} provider_key={provider_key}: getting metadata ...", flush=True)
-        sync_db.update_video_download_progress_sync(video_id, "get_metadata_for_download", 0)
+        sync_db.update_video_download_progress_sync(video_id, "get_metadata_for_download", 0, job_id=job_id)
         video_progress_bridge.put_progress(video_id, "get_metadata_for_download", 0)
         info, err = get_video_info(provider_key)
         if not info:
-            sync_db.update_video_download_progress_sync(video_id, "error_getting_metadata", 0, err)
+            sync_db.update_video_download_progress_sync(video_id, "error_getting_metadata", 0, err, job_id=job_id)
             _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: failed to get metadata — {err}", sync_db.SEVERITY_ERROR)
             print(f"[Download] video_id={video_id}: failed to get metadata — {err}", flush=True)
             return False, err or "Failed to get video info"
@@ -61,7 +61,7 @@ def download_video_sync(
                 info.get("thumbnail") or "",
             )
             _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: LLM processing")
-            sync_db.update_video_download_progress_sync(video_id, "llm_processing", 0)
+            sync_db.update_video_download_progress_sync(video_id, "llm_processing", 0, job_id=job_id)
             video_progress_bridge.put_progress(video_id, "llm_processing", 0)
             llm_desc = generate_llm_video_description(info.get("description") or "")
             sync_db.update_video_llm_sync(video_id, llm_desc)
@@ -77,7 +77,7 @@ def download_video_sync(
             if total and done:
                 pct = (done / total) * 100
                 rounded = round(pct, 1)
-                sync_db.update_video_download_progress_sync(video_id, "downloading", rounded)
+                sync_db.update_video_download_progress_sync(video_id, "downloading", rounded, job_id=job_id)
                 if pct >= _last_progress_pct[0] + _PROGRESS_PRINT_THRESH or pct >= 99:
                     _last_progress_pct[0] = int(pct)
                     video_progress_bridge.put_progress(video_id, "downloading", rounded)
@@ -93,19 +93,19 @@ def download_video_sync(
         }
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: downloading started")
         print(f"[Download] video_id={video_id}: downloading — 0%", flush=True)
-        sync_db.update_video_download_progress_sync(video_id, "downloading", 0)
+        sync_db.update_video_download_progress_sync(video_id, "downloading", 0, job_id=job_id)
         video_progress_bridge.put_progress(video_id, "downloading", 0)
         with __import__("yt_dlp").YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(video_url)
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: post-download started")
         print(f"[Download] video_id={video_id}: post-download (move, thumbnail, NFO) ...", flush=True)
-        sync_db.update_video_download_progress_sync(video_id, "post_download_processing", 0)
+        sync_db.update_video_download_progress_sync(video_id, "post_download_processing", 0, job_id=job_id)
         video_progress_bridge.put_progress(video_id, "post_download_processing", 0)
         os.makedirs(info["fsyt_final_path"], exist_ok=True)
         temp_files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
         if not temp_files:
             _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: no file after download", sync_db.SEVERITY_ERROR)
-            sync_db.update_video_download_progress_sync(video_id, "download_error", 0, "No file after download")
+            sync_db.update_video_download_progress_sync(video_id, "download_error", 0, "No file after download", job_id=job_id)
             return False, "No file after download"
         temp_file_path = os.path.join(temp_dir, temp_files[0])
         final_file_path = os.path.join(info["fsyt_final_path"], temp_files[0])
@@ -141,7 +141,7 @@ def download_video_sync(
         msg = str(e)[:500]
         prefix = f"Job {job_id} " if job_id else ""
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: failed — {msg}", sync_db.SEVERITY_ERROR)
-        sync_db.update_video_download_progress_sync(video_id, "download_error", 0, msg)
+        sync_db.update_video_download_progress_sync(video_id, "download_error", 0, msg, job_id=job_id)
         print(f"[Download] video_id={video_id}: failed — {msg}", flush=True)
         return False, msg
     finally:

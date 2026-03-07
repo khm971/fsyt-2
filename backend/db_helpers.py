@@ -26,9 +26,8 @@ async def update_video_metadata(video_id: int, upload_date, title: str, descript
 
 async def update_video_download_progress(video_id: int, status: str, percent: int = 0, message: str = None):
     await db.execute(
-        """UPDATE video SET status = $1, status_percent_complete = $2, status_message = $3 WHERE video_id = $4""",
+        """UPDATE video SET status = $1, status_message = $2 WHERE video_id = $3""",
         status,
-        percent,
         message,
         video_id,
     )
@@ -36,7 +35,7 @@ async def update_video_download_progress(video_id: int, status: str, percent: in
 
 async def update_video_download_info(video_id: int, file_path: str):
     await db.execute(
-        """UPDATE video SET download_date = NOW(), file_path = $1, status = 'available', status_percent_complete = 100 WHERE video_id = $2""",
+        """UPDATE video SET download_date = NOW(), file_path = $1, status = 'available' WHERE video_id = $2""",
         file_path.replace("\\", "/"),
         video_id,
     )
@@ -212,7 +211,7 @@ async def update_job_status(job_id: int, status: str, message: str = None, perce
 
 async def mark_job_done_success(job_id: int, message: str = None):
     await db.execute(
-        """UPDATE job_queue SET status = 'done', last_update = NOW(), status_message = $1, completed_flag = TRUE
+        """UPDATE job_queue SET status = 'done', last_update = NOW(), status_message = $1, status_percent_complete = 100, completed_flag = TRUE
            WHERE job_queue_id = $2""",
         message,
         job_id,
@@ -223,7 +222,7 @@ async def mark_job_done_exception(job_id: int, message: str, is_warning: bool = 
     if not is_warning and not is_error:
         is_error = True
     await db.execute(
-        """UPDATE job_queue SET status = 'done', last_update = NOW(), status_message = $1, warning_flag = $2, error_flag = $3
+        """UPDATE job_queue SET status = 'done', last_update = NOW(), status_message = $1, status_percent_complete = 100, warning_flag = $2, error_flag = $3
            WHERE job_queue_id = $4""",
         (message or "")[:1024],
         is_warning,

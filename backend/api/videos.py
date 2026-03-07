@@ -69,11 +69,16 @@ async def list_videos(
 ):
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
-                  v.record_created, v.status, v.status_percent_complete, v.priority,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished
            FROM video v
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
+           LEFT JOIN LATERAL (
+             SELECT j.status_percent_complete FROM job_queue j
+             WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
+             ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
+           ) jq ON true
            WHERE 1=1"""
     params = [USER_ID]
     i = 2
@@ -96,12 +101,17 @@ async def list_watch_in_progress(limit: int = Query(250, le=500)):
     """Videos user has started but not finished, sorted by last_watched DESC. User ID 1."""
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
-                  v.record_created, v.status, v.status_percent_complete, v.priority,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
            FROM video v
            INNER JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
+           LEFT JOIN LATERAL (
+             SELECT j.status_percent_complete FROM job_queue j
+             WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
+             ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
+           ) jq ON true
            WHERE uv.is_finished = FALSE
              AND (uv.progress_seconds > 0 OR uv.progress_percent > 0 OR uv.last_watched IS NOT NULL)
              AND v.status = 'available'
@@ -526,11 +536,17 @@ async def update_watch_progress(video_id: int, body: WatchProgressUpdate):
 @router.get("/{video_id}", response_model=VideoResponse)
 async def get_video(video_id: int):
     r = await db.fetchrow(
-        """SELECT video_id, provider_key, channel_id, title, upload_date, description,
-                  llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
-                  record_created, status, status_percent_complete, priority,
-                  status_message, is_ignore, metadata_last_updated, nfo_last_written
-           FROM video WHERE video_id = $1""",
+        """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
+                  v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
+                  v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written
+           FROM video v
+           LEFT JOIN LATERAL (
+             SELECT j.status_percent_complete FROM job_queue j
+             WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
+             ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
+           ) jq ON true
+           WHERE v.video_id = $1""",
         video_id,
     )
     if not r:
@@ -559,7 +575,7 @@ async def create_video(body: VideoCreate):
            VALUES ($1, $2, 'no_metadata')
            RETURNING video_id, provider_key, channel_id, title, upload_date, description,
                      llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
-                     record_created, status, status_percent_complete, priority,
+                     record_created, status, priority,
                      status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         provider_key,
         channel_id,
@@ -572,7 +588,7 @@ async def create_video(body: VideoCreate):
         )
     await broadcast_queue_update()
     await log_event(f"Video created: {provider_key} (video_id={row['video_id']}, channel_id={channel_id})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
-    return row_to_video(row)
+    return row_to_video(dict(row, status_percent_complete=None))
 
 
 @router.patch("/{video_id}", response_model=VideoResponse)
@@ -599,13 +615,13 @@ async def update_video(video_id: int, body: VideoUpdate):
         f"""UPDATE video SET {", ".join(updates)} WHERE video_id = ${i}
             RETURNING video_id, provider_key, channel_id, title, upload_date, description,
                       llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
-                      record_created, status, status_percent_complete, priority,
+                      record_created, status, priority,
                       status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         *values,
     )
     if not r:
         raise HTTPException(404, "Video not found")
-    return row_to_video(r)
+    return row_to_video(dict(r, status_percent_complete=None))
 
 
 @router.delete("/{video_id}", status_code=204)

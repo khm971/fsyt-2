@@ -14,6 +14,7 @@ export function QueueWebSocketProvider({ children }) {
   const [transcodeStatusChangedAt, setTranscodeStatusChangedAt] = useState(0);
   const [transcodeProgress, setTranscodeProgress] = useState(null);
   const [videoProgressOverrides, setVideoProgressOverrides] = useState({});
+  const [serverHeartbeat, setServerHeartbeat] = useState(null);
   const [reconnectedAt, setReconnectedAt] = useState(0);
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
@@ -54,6 +55,10 @@ export function QueueWebSocketProvider({ children }) {
         if (msg.type === "queue_update" && Array.isArray(msg.jobs)) {
           setJobs(msg.jobs);
           setQueueUpdatedAt(Date.now());
+          if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
+        }
+        if (msg.type === "heartbeat" && msg.value != null) {
+          setServerHeartbeat(msg.value);
         }
         if (msg.type === "log_event") {
           setLogUpdatedAt(Date.now());
@@ -104,6 +109,7 @@ export function QueueWebSocketProvider({ children }) {
     transcodeStatusChangedAt,
     transcodeProgress,
     videoProgressOverrides,
+    serverHeartbeat,
     reconnectedAt,
     send,
   };

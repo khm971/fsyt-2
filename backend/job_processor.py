@@ -33,10 +33,12 @@ async def run_job_loop() -> None:
                 continue
             if await db_helpers.get_control_bool("chargeable_errors_lockout"):
                 continue
+            heartbeat_value = datetime.now().isoformat()
             await db.execute(
                 "UPDATE control SET value = $1, last_update = NOW() WHERE key = 'server_heartbeat'",
-                datetime.now().isoformat(),
+                heartbeat_value,
             )
+            await ws_manager.broadcast({"type": "heartbeat", "value": heartbeat_value})
             row = await db.fetchrow(
                 """SELECT job_queue_id, job_type, video_id, channel_id, parameter
                    FROM job_queue
@@ -215,9 +217,13 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
         return "Video not found"
     await log_event(f"Job {job_id or '?'} video {video_id}: getting video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     await db_helpers.update_video_download_progress(video_id, "getting_metadata", 0)
+    if job_id is not None:
+        await db_helpers.update_job_status(job_id, "getting_metadata", None, 0)
     info, err = await asyncio.to_thread(get_video_info, v["provider_key"])
     if not info:
         await db_helpers.update_video_download_progress(video_id, "error_getting_metadata", 0, err)
+        if job_id is not None:
+            await db_helpers.update_job_status(job_id, "error_getting_metadata", err, 0)
         return err or "Failed to get metadata"
     await log_event(f"Job {job_id or '?'} video {video_id}: got video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     upload_date = info.get("fsyt_upload_date") or info.get("upload_date")
@@ -230,6 +236,8 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
     )
     await log_event(f"Job {job_id or '?'} video {video_id}: LLM processing", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     await db_helpers.update_video_download_progress(video_id, "llm_processing", 0)
+    if job_id is not None:
+        await db_helpers.update_job_status(job_id, "llm_processing", None, 0)
     target_llm = (await db_helpers.get_control_value("server_target_llm")) or "ollama"
     llm_desc = await asyncio.to_thread(
         generate_llm_video_description,
@@ -239,6 +247,8 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
     await db_helpers.update_video_llm_description(video_id, llm_desc)
     await log_event(f"Job {job_id or '?'} video {video_id}: metadata available", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     await db_helpers.update_video_download_progress(video_id, "metadata_available", 0)
+    if job_id is not None:
+        await db_helpers.update_job_status(job_id, "metadata_available", None, 0)
     return None
 
 
@@ -385,4 +395,5 @@ async def broadcast_queue_update() -> None:
         }
         for r in rows
     ]
-    await ws_manager.broadcast({"type": "queue_update", "jobs": jobs})
+    heartbeat = await db_helpers.get_control_value("server_heartbeat")
+    await ws_manager.broadcast({"type": "queue_update", "jobs": jobs, "heartbeat": heartbeat})

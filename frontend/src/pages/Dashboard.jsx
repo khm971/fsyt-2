@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
-import { cn, formatSmartTime, formatDateTime, formatDateTimeWithSeconds } from "../lib/utils";
+import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime } from "../lib/utils";
 import { Activity, Film, ScrollText, Users } from "lucide-react";
 
 const SEVERITY_COLORS = {
@@ -21,7 +21,13 @@ export default function Dashboard({ setError }) {
   const [logEntries, setLogEntries] = useState([]);
   const [statusData, setStatusData] = useState({ transcodes: [], websocket_connections: 0 });
   const [loading, setLoading] = useState(true);
-  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress } = useQueueWebSocket();
+  const [now, setNow] = useState(() => new Date());
+  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat } = useQueueWebSocket();
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +71,7 @@ export default function Dashboard({ setError }) {
     }
   };
 
-  const heartbeat = control.server_heartbeat?.value;
+  const heartbeat = serverHeartbeat ?? control.server_heartbeat?.value;
   const queuePaused = control.queue_paused?.value === "true";
   const chargeableErrorsLockout = control.chargeable_errors_lockout?.value === "true";
   const running = jobs.filter((j) => j.status === "running");
@@ -136,7 +142,14 @@ export default function Dashboard({ setError }) {
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <div className="text-gray-400 text-sm mb-1">Last heartbeat</div>
           <div className="text-white text-sm font-mono">
-            {formatDateTimeWithSeconds(heartbeat)}
+            {heartbeat ? (
+              <>
+                {formatHeartbeatTime(heartbeat)}{" "}
+                <span className="text-gray-400 font-normal">{formatRelativeTime(heartbeat, now)}</span>
+              </>
+            ) : (
+              "—"
+            )}
           </div>
         </div>
 
