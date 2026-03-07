@@ -34,6 +34,19 @@ export function formatDateTimeWithSeconds(isoString) {
   });
 }
 
+/** Duration in seconds to mm:ss or h:mm:ss. Returns "—" for null/invalid. */
+export function formatDurationSeconds(seconds) {
+  if (seconds == null || seconds < 0 || !Number.isFinite(seconds)) return "—";
+  const s = Math.floor(Number(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+  }
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
 /** Today: time only (e.g. "3:45 PM"). Otherwise: date (e.g. "Dec 3" or "Dec 3, 2024"). */
 export function formatSmartTime(isoString) {
   const d = new Date(isoString);

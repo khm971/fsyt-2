@@ -54,6 +54,7 @@ def row_to_video(r) -> VideoResponse:
         metadata_last_updated=r["metadata_last_updated"],
         nfo_last_written=r["nfo_last_written"],
         watch_progress_percent=r.get("watch_progress_percent"),
+        watch_progress_seconds=r.get("watch_progress_seconds"),
         watch_is_finished=r.get("watch_is_finished"),
     )
 
@@ -87,6 +88,27 @@ async def list_videos(
     q += f" ORDER BY {col} {dirn} LIMIT ${i}"
     params.append(limit)
     rows = await db.fetch(q, *params)
+    return [row_to_video(r) for r in rows]
+
+
+@router.get("/watch", response_model=list[VideoResponse])
+async def list_watch_in_progress(limit: int = Query(250, le=500)):
+    """Videos user has started but not finished, sorted by last_watched DESC. User ID 1."""
+    q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
+                  v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
+                  v.record_created, v.status, v.status_percent_complete, v.priority,
+                  v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
+                  uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
+                  uv.progress_seconds AS watch_progress_seconds
+           FROM video v
+           INNER JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
+           WHERE uv.is_finished = FALSE
+             AND (uv.progress_seconds > 0 OR uv.progress_percent > 0 OR uv.last_watched IS NOT NULL)
+             AND v.status = 'available'
+             AND (v.is_ignore IS NOT TRUE)
+           ORDER BY uv.last_watched DESC NULLS LAST
+           LIMIT $2"""
+    rows = await db.fetch(q, USER_ID, limit)
     return [row_to_video(r) for r in rows]
 
 
@@ -304,16 +326,37 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
             )
             await log_event(f"[ffmpeg HLS] transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id)
         else:
-            await log_event(f"[ffmpeg HLS] transcode failed (exit {exit_code}), not persisted", SEVERITY_WARNING, video_id=video_id)
+            msg = f"[ffmpeg HLS] transcode failed (exit {exit_code}), not persisted"
+            await log_event(msg, SEVERITY_ERROR, video_id=video_id)
+            print(f"[ffmpeg HLS video_id={video_id}] {msg}", flush=True)
+            async with _hls_lock:
+                _hls_cache.pop(video_id, None)
         await broadcast_transcode_status_changed()
 
     asyncio.create_task(_wait_first_segment())
     asyncio.create_task(_wait_proc())
     await entry["ready"].wait()
-    return out_dir
+
+    playlist_path = os.path.join(out_dir, "playlist.m3u8")
+    if proc.returncode is not None and proc.returncode != 0:
+        raise HTTPException(500, "HLS transcode failed")
+    if not os.path.isfile(playlist_path):
+        await log_event(
+            f"[ffmpeg HLS] video_id={video_id}: FFMPEG slow to start, waiting for playlist",
+            SEVERITY_WARNING,
+            video_id=video_id,
+        )
+    for _ in range(90):
+        if os.path.isfile(playlist_path):
+            return out_dir
+        await asyncio.sleep(0.5)
+    raise HTTPException(503, "Transcode in progress, please retry shortly")
 
 
 HLS_SEGMENT_SECONDS = 2
+# FFmpeg cuts HLS at keyframe boundaries, so actual segments are often 5-10x longer than hls_time.
+# Use ~8s average for progress estimate to avoid showing low percentages when nearly done.
+HLS_ESTIMATED_AVG_SEGMENT_SECONDS = 8
 
 
 async def get_active_transcodes() -> list[dict]:
@@ -351,7 +394,11 @@ async def get_active_transcodes() -> list[dict]:
                 pass
 
         duration = durations.get(video_id)
-        total_segments = math.ceil(duration / HLS_SEGMENT_SECONDS) if duration and duration > 0 else None
+        total_segments = (
+            math.ceil(duration / HLS_ESTIMATED_AVG_SEGMENT_SECONDS)
+            if duration and duration > 0
+            else None
+        )
         percent_complete = None
         if segment_count is not None and total_segments is not None and total_segments > 0:
             percent_complete = min(100, round((segment_count / total_segments) * 100))
@@ -453,13 +500,14 @@ async def _save_watch_progress(video_id: int, progress_seconds: int, progress_pe
     pct = min(100, max(0, round(progress_percent, 2)))
     is_finished = pct > 95
     await db.execute(
-        """INSERT INTO user_video (user_id, video_id, is_watched, progress_seconds, progress_percent, is_finished)
-           VALUES ($1, $2, TRUE, $3, $4, $5)
+        """INSERT INTO user_video (user_id, video_id, is_watched, progress_seconds, progress_percent, is_finished, last_watched)
+           VALUES ($1, $2, TRUE, $3, $4, $5, NOW())
            ON CONFLICT (user_id, video_id) DO UPDATE SET
              is_watched = TRUE,
              progress_seconds = EXCLUDED.progress_seconds,
              progress_percent = EXCLUDED.progress_percent,
-             is_finished = EXCLUDED.is_finished""",
+             is_finished = EXCLUDED.is_finished,
+             last_watched = NOW()""",
         USER_ID,
         video_id,
         progress_seconds,

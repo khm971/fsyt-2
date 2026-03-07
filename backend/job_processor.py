@@ -230,9 +230,11 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
     )
     await log_event(f"Job {job_id or '?'} video {video_id}: LLM processing", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     await db_helpers.update_video_download_progress(video_id, "llm_processing", 0)
+    target_llm = (await db_helpers.get_control_value("server_target_llm")) or "ollama"
     llm_desc = await asyncio.to_thread(
         generate_llm_video_description,
         info.get("description") or "",
+        target_llm,
     )
     await db_helpers.update_video_llm_description(video_id, llm_desc)
     await log_event(f"Job {job_id or '?'} video {video_id}: metadata available", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)

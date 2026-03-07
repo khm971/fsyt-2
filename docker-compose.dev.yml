@@ -6,6 +6,8 @@ services:
     build: ./backend
     volumes:
       - ./backend:/app
+      - media_files:/media
+      - /etc/localtime:/etc/localtime:ro
     command: >
       sh -c "pip install debugpy -q &&
         python -m debugpy --listen 0.0.0.0:5678 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"

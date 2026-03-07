@@ -287,6 +287,15 @@ export default function VideoPlayer({ videoId, title, duration, onClose }) {
                 autoPlay
                 className="w-full h-full object-contain rounded-b-lg"
                 onLoadedMetadata={updateResolutionFromVideo}
+                onError={(e) => {
+                  const mediaError = e.target?.error;
+                  const msg = mediaError?.code === 4
+                    ? "Video format not supported or transcode failed."
+                    : mediaError?.code === 2
+                      ? "Network error loading video."
+                      : "Video failed to load.";
+                  setError(msg);
+                }}
               />
             )}
           </div>

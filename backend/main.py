@@ -2,6 +2,12 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root so OLLAMA_*, DATABASE_URL, etc. are set before any service imports
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware

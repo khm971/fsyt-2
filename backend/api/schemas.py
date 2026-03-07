@@ -75,6 +75,7 @@ class VideoResponse(VideoBase):
     metadata_last_updated: Optional[datetime] = None
     nfo_last_written: Optional[datetime] = None
     watch_progress_percent: Optional[float] = None
+    watch_progress_seconds: Optional[int] = None
     watch_is_finished: Optional[bool] = None
 
     class Config:

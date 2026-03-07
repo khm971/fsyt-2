@@ -89,7 +89,7 @@ export default function Log({ setError }) {
       </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-x-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800 text-left text-gray-400">

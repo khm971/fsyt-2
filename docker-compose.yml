@@ -1,6 +1,9 @@
 # FlagShip YouTube: backend + frontend. PostgreSQL is external (10.50.1.250 fsyt2).
 # Override DATABASE_URL via .env if needed (e.g. host.docker.internal).
 #
+# Timezone: Containers use host /etc/localtime when available. On Windows, set TZ in .env
+# (e.g. TZ=America/New_York) for local time.
+#
 # Media storage: Set SMB_USER and SMB_PASS in .env to mount \\10.50.1.250\Media\FSyt2.
 # Alternative: Map the share to a drive letter (e.g. Z:) and set MEDIA_VOLUME=Z:\ in .env.
 services:
@@ -11,17 +14,26 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:farstar@10.50.1.250/fsyt2}
       - MEDIA_ROOT=/media
+      - TZ=${TZ:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT:-300}
     ports:
       - "0.0.0.0:8000:8000"
     volumes:
       - media_files:/media
+      - /etc/localtime:/etc/localtime:ro
 
   frontend:
     build: ./frontend
     image: fsyt2-frontend:latest
     container_name: fsyt2-frontend
+    environment:
+      - TZ=${TZ:-}
     ports:
       - "0.0.0.0:10200:80"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       - backend
 

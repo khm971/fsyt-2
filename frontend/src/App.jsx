@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { cn } from "./lib/utils";
 import {
+  PlayCircle,
   LayoutDashboard,
   Video,
   Radio,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { useQueueWebSocket } from "./context/QueueWebSocketContext";
 import { ToastProvider } from "./context/ToastContext";
+import Watch from "./pages/Watch";
 import Dashboard from "./pages/Dashboard";
 import Channels from "./pages/Channels";
 import Videos from "./pages/Videos";
@@ -29,6 +31,10 @@ function Nav() {
 
   return (
     <nav className="flex gap-1 p-2">
+      <NavLink to="/watch" className={linkClass}>
+        <PlayCircle className="w-4 h-4" />
+        Watch
+      </NavLink>
       <NavLink to="/" end className={linkClass}>
         <LayoutDashboard className="w-4 h-4" />
         Dashboard
@@ -97,6 +103,7 @@ export default function App() {
         </header>
         <main className="flex-1 p-4" key={reconnectedAt}>
           <Routes>
+            <Route path="/watch" element={<Watch setError={setError} />} />
             <Route path="/" element={<Dashboard setError={setError} />} />
             <Route path="/channels" element={<Channels setError={setError} />} />
             <Route path="/videos" element={<Videos setError={setError} />} />

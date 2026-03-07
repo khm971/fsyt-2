@@ -125,7 +125,7 @@ export default function Queue({ setError }) {
         </div>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-auto">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/80 text-gray-400">
             <tr>

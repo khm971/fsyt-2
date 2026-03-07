@@ -42,6 +42,12 @@ export const api = {
   },
 
   videos: {
+    watchList: (params = {}) => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set("limit", params.limit);
+      const query = q.toString();
+      return apiFetch(`/videos/watch${query ? `?${query}` : ""}`);
+    },
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.channel_id != null) q.set("channel_id", params.channel_id);

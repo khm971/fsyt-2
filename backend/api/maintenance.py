@@ -25,7 +25,7 @@ async def clear_watch_history():
         await log_event("Maintenance: clearing all watch history", SEVERITY_INFO)
         await db.execute(
             """UPDATE user_video
-               SET progress_seconds = 0, progress_percent = 0, is_finished = FALSE"""
+               SET progress_seconds = 0, progress_percent = 0, is_finished = FALSE, last_watched = NULL"""
         )
         await log_event("Maintenance: cleared all watch history", SEVERITY_INFO)
         return {"ok": True}
