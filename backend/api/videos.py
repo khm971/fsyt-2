@@ -48,7 +48,6 @@ def row_to_video(r) -> VideoResponse:
         record_created=r["record_created"],
         status=r["status"],
         status_percent_complete=r["status_percent_complete"],
-        priority=r["priority"] or 50,
         status_message=r["status_message"],
         is_ignore=r["is_ignore"] or False,
         metadata_last_updated=r["metadata_last_updated"],
@@ -69,7 +68,7 @@ async def list_videos(
 ):
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
-                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished
            FROM video v
@@ -101,7 +100,7 @@ async def list_watch_in_progress(limit: int = Query(250, le=500)):
     """Videos user has started but not finished, sorted by last_watched DESC. User ID 1."""
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
-                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
@@ -538,7 +537,7 @@ async def get_video(video_id: int):
     r = await db.fetchrow(
         """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
-                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete, v.priority,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written
            FROM video v
            LEFT JOIN LATERAL (
@@ -575,7 +574,7 @@ async def create_video(body: VideoCreate):
            VALUES ($1, $2, 'no_metadata')
            RETURNING video_id, provider_key, channel_id, title, upload_date, description,
                      llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
-                     record_created, status, priority,
+                     record_created, status,
                      status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         provider_key,
         channel_id,
@@ -615,7 +614,7 @@ async def update_video(video_id: int, body: VideoUpdate):
         f"""UPDATE video SET {", ".join(updates)} WHERE video_id = ${i}
             RETURNING video_id, provider_key, channel_id, title, upload_date, description,
                       llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
-                      record_created, status, priority,
+                      record_created, status,
                       status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         *values,
     )

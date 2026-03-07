@@ -55,7 +55,6 @@ class VideoBase(BaseModel):
     status_percent_complete: Optional[int] = None
     status_message: Optional[str] = None
     is_ignore: bool = False
-    priority: int = 50
 
 
 class VideoCreate(BaseModel):

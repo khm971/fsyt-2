@@ -71,7 +71,7 @@ def update_video_download_info_sync(video_id: int, file_path: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available' WHERE video_id = %s""",
+                """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available', nfo_last_written = NOW() WHERE video_id = %s""",
                 (file_path.replace("\\", "/"), video_id),
             )
 
