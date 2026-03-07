@@ -28,14 +28,22 @@ class ConnectionManager:
             return
         text = json.dumps(message)
         dead = set()
+        last_error = None
         async with self._lock:
             for ws in self._connections:
                 try:
                     await ws.send_text(text)
-                except Exception:
+                except Exception as e:
                     dead.add(ws)
+                    last_error = e
             for ws in dead:
                 self._connections.discard(ws)
+        if dead and last_error is not None:
+            from log_helper import log_event, SEVERITY_ERROR
+            await log_event(
+                f"WebSocket broadcast send failed for {len(dead)} connection(s): {type(last_error).__name__}: {last_error}",
+                SEVERITY_ERROR,
+            )
 
 
 ws_manager = ConnectionManager()

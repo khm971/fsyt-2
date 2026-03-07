@@ -52,6 +52,12 @@ def download_video_sync(
             upload_date = upload_date
         else:
             upload_date = None
+        duration = None
+        if info.get("duration") is not None:
+            try:
+                duration = int(info["duration"])
+            except (TypeError, ValueError):
+                pass
         if is_update_metadata:
             sync_db.update_video_metadata_sync(
                 video_id,
@@ -59,6 +65,7 @@ def download_video_sync(
                 upload_date,
                 info.get("description") or "",
                 info.get("thumbnail") or "",
+                duration,
             )
             _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: LLM processing")
             sync_db.update_video_download_progress_sync(video_id, "llm_processing", 0, job_id=job_id)
@@ -124,21 +131,22 @@ def download_video_sync(
                     with open(thumb_path, "wb") as f:
                         f.write(r.content)
                     _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: thumbnail saved")
-            except Exception:
-                pass
+            except Exception as thumb_err:
+                _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: thumbnail download failed — {type(thumb_err).__name__}: {thumb_err}", sync_db.SEVERITY_ERROR)
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: writing NFO")
         nfo_path = os.path.join(info["fsyt_final_path"], info["fsyt_video_title_safe"] + ".nfo")
         plot = llm_desc or info.get("description") or ""
         ud = info.get("upload_date") or "20000101"
-        create_video_nfo_2(nfo_path, provider_key, info.get("title") or "Unknown", info.get("channel") or "Unknown", ud, plot)
+        if not create_video_nfo_2(nfo_path, provider_key, info.get("title") or "Unknown", info.get("channel") or "Unknown", ud, plot, video_id=video_id, job_id=job_id, channel_id=channel_id):
+            _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: NFO write failed (path={nfo_path})", sync_db.SEVERITY_ERROR)
         root = get_media_root()
         rel_path = final_file_path.replace(root, "").lstrip(os.sep).replace("\\", "/")
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: updating DB, download complete")
-        sync_db.update_video_download_info_sync(video_id, rel_path)
+        sync_db.update_video_download_info_sync(video_id, rel_path, duration)
         print(f"[Download] video_id={video_id}: done.", flush=True)
         return True, ""
     except Exception as e:
-        msg = str(e)[:500]
+        msg = f"{type(e).__name__}: {str(e)[:500]}"
         prefix = f"Job {job_id} " if job_id else ""
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: failed — {msg}", sync_db.SEVERITY_ERROR)
         sync_db.update_video_download_progress_sync(video_id, "download_error", 0, msg, job_id=job_id)

@@ -2,8 +2,14 @@
 from xml.etree import ElementTree as ET
 from datetime import datetime
 
+# Optional: for logging from sync context (download_service runs in thread)
+try:
+    import sync_db
+except ImportError:
+    sync_db = None
 
-def create_video_nfo_2(output_path: str, youtube_video_id: str, youtube_title: str, youtube_channel: str, youtube_upload_date: str, youtube_plot: str) -> bool:
+
+def create_video_nfo_2(output_path: str, youtube_video_id: str, youtube_title: str, youtube_channel: str, youtube_upload_date: str, youtube_plot: str, video_id: int = None, job_id: int = None, channel_id: int = None) -> bool:
     try:
         root = ET.Element("episodedetails")
         ET.SubElement(root, "title").text = youtube_title or "Unknown"
@@ -27,5 +33,8 @@ def create_video_nfo_2(output_path: str, youtube_video_id: str, youtube_title: s
         tree.write(output_path, encoding="utf-8", xml_declaration=True)
         return True
     except Exception as e:
+        err_msg = f"NFO write failed: output_path={output_path!r} error={type(e).__name__}: {e}"
+        if sync_db:
+            sync_db.log_event_sync(err_msg, sync_db.SEVERITY_ERROR, job_id=job_id, video_id=video_id, channel_id=channel_id)
         print(f"Error creating NFO: {e}")
         return False

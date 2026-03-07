@@ -13,7 +13,7 @@ async def clear_transcodes():
         return await clear_all_hls_transcodes()
     except Exception as exc:
         await log_event(
-            f"Maintenance: failed to clear transcodes: {exc}",
+            f"Maintenance: failed to clear transcodes: {type(exc).__name__}: {exc}",
             SEVERITY_ERROR,
         )
         raise HTTPException(500, "Failed to clear transcodes") from exc
@@ -31,7 +31,7 @@ async def clear_watch_history():
         return {"ok": True}
     except Exception as exc:
         await log_event(
-            f"Maintenance: failed to clear watch history: {exc}",
+            f"Maintenance: failed to clear watch history: {type(exc).__name__}: {exc}",
             SEVERITY_ERROR,
         )
         raise HTTPException(500, "Failed to clear watch history") from exc

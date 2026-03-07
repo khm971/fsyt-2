@@ -12,7 +12,7 @@ from database import db
 from services.tools import get_media_root
 from pydantic import BaseModel
 from api.schemas import VideoCreate, VideoUpdate, VideoResponse
-from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
+from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_WARNING, SEVERITY_ERROR
 
 USER_ID = 1  # No login; assume single user
 
@@ -173,11 +173,11 @@ async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int) 
             if not text:
                 continue
             severity = SEVERITY_ERROR if "error" in text.lower() else SEVERITY_LOW_LEVEL
-            await log_event(f"[ffmpeg] {text}", severity, video_id=video_id)
+            await log_event(f"[ffmpeg] video_id={video_id}: {text}", severity, video_id=video_id)
             if severity != SEVERITY_LOW_LEVEL:
                 print(f"[ffmpeg video_id={video_id}] {text}", flush=True)
     except Exception as e:
-        await log_event(f"[ffmpeg stderr read error] {e}", SEVERITY_WARNING, video_id=video_id)
+        await log_event(f"[ffmpeg] video_id={video_id}: stderr read error: {type(e).__name__}: {e}", SEVERITY_ERROR, video_id=video_id)
         print(f"[ffmpeg video_id={video_id}] stderr read error: {e}", flush=True)
 
 
@@ -185,7 +185,7 @@ async def _transcode_stream(full_path: str, video_id: int):
     """Yield chunks from ffmpeg transcoding input to H.264/AAC for iPad compatibility."""
     args = _build_ffmpeg_args(full_path)
     cmd_str = shlex.join(args)
-    await log_event(f"[ffmpeg command] {cmd_str}", SEVERITY_INFO, video_id=video_id)
+    await log_event(f"[ffmpeg] video_id={video_id}: command {cmd_str}", SEVERITY_INFO, video_id=video_id)
     print(f"[ffmpeg video_id={video_id}] command: {cmd_str}", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
@@ -242,8 +242,11 @@ async def clear_all_hls_transcodes() -> dict[str, int]:
                 pass
             try:
                 await proc.wait()
-            except Exception:
-                pass
+            except Exception as e:
+                await log_event(
+                    f"clear_all_hls_transcodes: failed to wait for transcode process: {type(e).__name__}: {e}",
+                    SEVERITY_ERROR,
+                )
             stopped_processes += 1
 
     deleted_entries = 0
@@ -303,7 +306,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
 
     args = _build_ffmpeg_hls_args(full_path, out_dir)
     cmd_str = shlex.join(args)
-    await log_event(f"[ffmpeg HLS] {cmd_str}", SEVERITY_INFO, video_id=video_id)
+    await log_event(f"[ffmpeg HLS] video_id={video_id}: {cmd_str}", SEVERITY_INFO, video_id=video_id)
     print(f"[ffmpeg HLS video_id={video_id}] command: {cmd_str}", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
@@ -333,9 +336,9 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
                 rel_path,
                 video_id,
             )
-            await log_event(f"[ffmpeg HLS] transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id)
+            await log_event(f"[ffmpeg HLS] video_id={video_id}: transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id)
         else:
-            msg = f"[ffmpeg HLS] transcode failed (exit {exit_code}), not persisted"
+            msg = f"[ffmpeg HLS] video_id={video_id}: transcode failed (exit {exit_code}), not persisted"
             await log_event(msg, SEVERITY_ERROR, video_id=video_id)
             print(f"[ffmpeg HLS video_id={video_id}] {msg}", flush=True)
             async with _hls_lock:
@@ -348,6 +351,11 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
 
     playlist_path = os.path.join(out_dir, "playlist.m3u8")
     if proc.returncode is not None and proc.returncode != 0:
+        await log_event(
+            f"HLS transcode failed: video_id={video_id} exit_code={proc.returncode} out_dir={out_dir}",
+            SEVERITY_ERROR,
+            video_id=video_id,
+        )
         raise HTTPException(500, "HLS transcode failed")
     if not os.path.isfile(playlist_path):
         await log_event(
@@ -359,6 +367,11 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
         if os.path.isfile(playlist_path):
             return out_dir
         await asyncio.sleep(0.5)
+    await log_event(
+        f"HLS transcode timeout (playlist not ready): video_id={video_id} playlist_path={playlist_path}",
+        SEVERITY_ERROR,
+        video_id=video_id,
+    )
     raise HTTPException(503, "Transcode in progress, please retry shortly")
 
 
@@ -399,8 +412,12 @@ async def get_active_transcodes() -> list[dict]:
         if out_dir and os.path.isdir(out_dir):
             try:
                 segment_count = sum(1 for f in os.listdir(out_dir) if f.startswith("seg_") and f.endswith(".ts"))
-            except OSError:
-                pass
+            except OSError as e:
+                await log_event(
+                    f"get_active_transcodes: listdir failed: video_id={video_id} out_dir={out_dir} error={type(e).__name__}: {e}",
+                    SEVERITY_ERROR,
+                    video_id=video_id,
+                )
 
         duration = durations.get(video_id)
         total_segments = (
@@ -620,6 +637,15 @@ async def update_video(video_id: int, body: VideoUpdate):
     )
     if not r:
         raise HTTPException(404, "Video not found")
+    if body.is_ignore is not None:
+        label = "ignored" if body.is_ignore else "unignored"
+        title_or_key = r.get("title") or r.get("provider_key") or f"video_id={video_id}"
+        await log_event(
+            f"Video {label}: video_id={video_id} ({title_or_key})",
+            SEVERITY_NOTICE,
+            video_id=video_id,
+            channel_id=r.get("channel_id"),
+        )
     return row_to_video(dict(r, status_percent_complete=None))
 
 

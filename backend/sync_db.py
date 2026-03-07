@@ -49,12 +49,12 @@ def update_video_download_progress_sync(video_id: int, status: str, percent: int
                 )
 
 
-def update_video_metadata_sync(video_id: int, title: str, upload_date, description: str, thumbnail: str):
+def update_video_metadata_sync(video_id: int, title: str, upload_date, description: str, thumbnail: str, duration: int | None = None):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """UPDATE video SET title = %s, upload_date = %s, description = %s, thumbnail = %s, metadata_last_updated = NOW() WHERE video_id = %s""",
-                (title, upload_date, description, thumbnail, video_id),
+                """UPDATE video SET title = %s, upload_date = %s, description = %s, thumbnail = %s, duration = %s, metadata_last_updated = NOW() WHERE video_id = %s""",
+                (title, upload_date, description, thumbnail, duration, video_id),
             )
 
 
@@ -67,13 +67,19 @@ def update_video_llm_sync(video_id: int, llm_description_1: str):
             )
 
 
-def update_video_download_info_sync(video_id: int, file_path: str):
+def update_video_download_info_sync(video_id: int, file_path: str, duration: int | None = None):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available', nfo_last_written = NOW() WHERE video_id = %s""",
-                (file_path.replace("\\", "/"), video_id),
-            )
+            if duration is not None:
+                cur.execute(
+                    """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available', nfo_last_written = NOW(), duration = %s WHERE video_id = %s""",
+                    (file_path.replace("\\", "/"), duration, video_id),
+                )
+            else:
+                cur.execute(
+                    """UPDATE video SET download_date = NOW(), file_path = %s, status = 'available', nfo_last_written = NOW() WHERE video_id = %s""",
+                    (file_path.replace("\\", "/"), video_id),
+                )
 
 
 # Severity constants (match log_helper)

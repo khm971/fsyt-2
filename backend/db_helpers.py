@@ -12,14 +12,15 @@ async def get_video_by_id(video_id: int):
     )
 
 
-async def update_video_metadata(video_id: int, upload_date, title: str, description: str, thumbnail: str):
+async def update_video_metadata(video_id: int, upload_date, title: str, description: str, thumbnail: str, duration: int | None = None):
     await db.execute(
-        """UPDATE video SET title = $1, upload_date = $2, description = $3, thumbnail = $4, metadata_last_updated = NOW()
-           WHERE video_id = $5""",
+        """UPDATE video SET title = $1, upload_date = $2, description = $3, thumbnail = $4, duration = $5, metadata_last_updated = NOW()
+           WHERE video_id = $6""",
         title or None,
         upload_date,
         description or None,
         thumbnail or None,
+        duration,
         video_id,
     )
 

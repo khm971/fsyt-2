@@ -109,7 +109,12 @@ async def acknowledge_job(job_id: int):
     if not r:
         raise HTTPException(404, "Job not found")
     await broadcast_queue_update()
-    await log_event(f"Job {job_id} acknowledged", SEVERITY_INFO, job_id=job_id, video_id=r.get("video_id"), channel_id=r.get("channel_id"))
+    vid, cid = r.get("video_id"), r.get("channel_id")
+    extra = [f"video_id={vid}"] if vid is not None else []
+    if cid is not None:
+        extra.append(f"channel_id={cid}")
+    suffix = " (" + ", ".join(extra) + ")" if extra else ""
+    await log_event(f"Job {job_id} acknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
     return row_to_job(r)
 
 
@@ -126,5 +131,10 @@ async def cancel_job(job_id: int):
     if not r:
         raise HTTPException(404, "Job not found or not cancellable")
     await broadcast_queue_update()
-    await log_event(f"Job {job_id} cancelled", SEVERITY_INFO, job_id=job_id, video_id=r.get("video_id"), channel_id=r.get("channel_id"))
+    vid, cid = r.get("video_id"), r.get("channel_id")
+    extra = [f"video_id={vid}"] if vid is not None else []
+    if cid is not None:
+        extra.append(f"channel_id={cid}")
+    suffix = " (" + ", ".join(extra) + ")" if extra else ""
+    await log_event(f"Job {job_id} cancelled{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
     return row_to_job(r)

@@ -114,7 +114,7 @@ async def run_job_loop() -> None:
                             success, message, is_error = False, "Channel not found", True
                         else:
                             await log_event(f"Job {job_id} channel {row['channel_id']}: starting channel artwork download", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
-                            ok = await asyncio.to_thread(
+                            ok, err = await asyncio.to_thread(
                                 download_channel_artwork,
                                 ch["provider_key"] or "",
                                 ch.get("folder_on_disk") or "",
@@ -122,7 +122,7 @@ async def run_job_loop() -> None:
                                 True,
                             )
                             if not ok:
-                                success, message, is_warning = False, "Artwork download failed", True
+                                success, message, is_warning = False, err or "Artwork download failed", True
                             else:
                                 await log_event(f"Job {job_id} channel {row['channel_id']}: channel artwork download finished", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
 
@@ -190,13 +190,23 @@ async def run_job_loop() -> None:
                 await db_helpers.mark_job_done_success(job_id, message)
                 status_label = "success" + (f" — {message}" if message else "")
                 print(f"[Job {job_id}] Finished: {status_label}")
-                await log_event(f"Job {job_id} completed: {job_type}", SEVERITY_INFO, job_id=job_id, video_id=row.get("video_id"), channel_id=cid)
+                vid, cid = row.get("video_id"), row.get("channel_id")
+                extra = [f"video_id={vid}"] if vid is not None else []
+                if cid is not None:
+                    extra.append(f"channel_id={cid}")
+                suffix = " (" + ", ".join(extra) + ")" if extra else ""
+                await log_event(f"Job {job_id} completed: {job_type}{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
             else:
                 await db_helpers.mark_job_done_exception(job_id, message or "Error", is_warning=is_warning, is_error=is_error)
                 kind = "warning" if is_warning else "error"
                 print(f"[Job {job_id}] Finished: {kind} — {message or 'Error'}")
                 sev = SEVERITY_WARNING if is_warning else SEVERITY_ERROR
-                await log_event(f"Job {job_id} failed: {job_type} — {message or 'Error'}", sev, job_id=job_id, video_id=row.get("video_id"), channel_id=cid)
+                vid, cid = row.get("video_id"), row.get("channel_id")
+                extra = [f"video_id={vid}"] if vid is not None else []
+                if cid is not None:
+                    extra.append(f"channel_id={cid}")
+                suffix = " (" + ", ".join(extra) + ")" if extra else ""
+                await log_event(f"Job {job_id} failed: {job_type} — {message or 'Error'}{suffix}", sev, job_id=job_id, video_id=vid, channel_id=cid)
             await broadcast_queue_update()
             # Notify UI to refresh video list when a video-affecting job finished
             if row.get("video_id") and job_type in ("download_video", "get_metadata"):
@@ -205,7 +215,16 @@ async def run_job_loop() -> None:
         except asyncio.CancelledError:
             break
         except Exception as e:
+            msg = f"Job loop unhandled exception: {type(e).__name__}: {e}"
             print(f"Job loop error: {e}")
+            vid, cid = (row.get("video_id"), row.get("channel_id")) if row else (None, None)
+            extra = [f"job_id={job_id}"] if job_id is not None else []
+            if vid is not None:
+                extra.append(f"video_id={vid}")
+            if cid is not None:
+                extra.append(f"channel_id={cid}")
+            suffix = " (" + ", ".join(extra) + ")" if extra else ""
+            await log_event(f"{msg}{suffix}", SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid)
             if job_id is not None:
                 await db_helpers.mark_job_done_exception(job_id, str(e)[:500], is_error=True)
                 await broadcast_queue_update()
@@ -227,12 +246,19 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
         return err or "Failed to get metadata"
     await log_event(f"Job {job_id or '?'} video {video_id}: got video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     upload_date = info.get("fsyt_upload_date") or info.get("upload_date")
+    duration = None
+    if info.get("duration") is not None:
+        try:
+            duration = int(info["duration"])
+        except (TypeError, ValueError):
+            pass
     await db_helpers.update_video_metadata(
         video_id,
         upload_date,
         info.get("title") or "Unknown",
         info.get("description") or "",
         info.get("thumbnail") or "",
+        duration=duration,
     )
     await log_event(f"Job {job_id or '?'} video {video_id}: LLM processing", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
     await db_helpers.update_video_download_progress(video_id, "llm_processing", 0)
@@ -306,12 +332,17 @@ async def _run_update_channel_info(channel_id: int) -> bool:
     if not ch:
         return False
     if ch.get("provider_key"):
-        info = await asyncio.to_thread(get_channel_info_by_yt_channel_id, ch["provider_key"])
+        info, err = await asyncio.to_thread(get_channel_info_by_yt_channel_id, ch["provider_key"])
     elif ch.get("handle"):
-        info = await asyncio.to_thread(get_channel_info_by_name, ch["handle"])
+        info, err = await asyncio.to_thread(get_channel_info_by_name, ch["handle"])
     else:
         return False
     if not info:
+        await log_event(
+            f"update_channel_info failed: channel_id={channel_id} provider_key={ch.get('provider_key')!r} handle={ch.get('handle')!r} error={err or 'no info returned'}",
+            SEVERITY_ERROR,
+            channel_id=channel_id,
+        )
         return False
     title = (info.get("channel") or "").strip()
     folder = sanitize_string_for_disk_path(title) if title else (ch.get("folder_on_disk") or "channel")
@@ -349,6 +380,11 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
             await db_helpers.add_job("update_channel_info", channel_id=channel_id, priority=50)
             await db_helpers.add_job("download_channel_artwork", channel_id=channel_id, priority=50)
         except Exception as e:
+            await log_event(
+                f"Add video (create channel) failed: provider_key={chan_yt_id!r} error={type(e).__name__}: {e}",
+                SEVERITY_ERROR,
+                channel_id=None,
+            )
             return str(e)
     added, new_id = await db_helpers.add_video_if_not_exist(channel_id, provider_key, None, None, None)
     if not added:

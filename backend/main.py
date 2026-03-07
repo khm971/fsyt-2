@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import db
 from run_migrations import run_migrations
-from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE
+from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_ERROR
 from job_processor import run_job_loop, broadcast_queue_update
 from websocket_manager import ws_manager
 from video_progress_bridge import drain as drain_video_progress
@@ -39,8 +39,11 @@ async def _drain_video_progress_loop():
                     "status": status,
                     "status_percent_complete": percent,
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            await log_event(
+                f"Video progress drain loop error: {type(e).__name__}: {e}",
+                SEVERITY_ERROR,
+            )
         await asyncio.sleep(0.2)
 
 
@@ -51,8 +54,11 @@ async def _transcode_progress_broadcast_loop():
             transcodes = await get_active_transcodes()
             if transcodes:
                 await ws_manager.broadcast({"type": "transcode_progress", "transcodes": transcodes})
-        except Exception:
-            pass
+        except Exception as e:
+            await log_event(
+                f"Transcode progress broadcast loop error: {type(e).__name__}: {e}",
+                SEVERITY_ERROR,
+            )
         await asyncio.sleep(1.5)
 
 
@@ -61,7 +67,14 @@ async def lifespan(app: FastAPI):
     await db.connect()
     await log_event("Application starting, database connected", SEVERITY_DEBUG)
     await log_event("Running migrations", SEVERITY_DEBUG)
-    await run_migrations()
+    try:
+        await run_migrations()
+    except Exception as e:
+        await log_event(
+            f"Migrations failed: {type(e).__name__}: {e}",
+            SEVERITY_ERROR,
+        )
+        raise
     await log_event("Migrations complete", SEVERITY_INFO)
     await log_event("Starting job loop", SEVERITY_DEBUG)
     task = asyncio.create_task(run_job_loop())
@@ -133,8 +146,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     progress_seconds = int(msg.get("progress_seconds", 0))
                     progress_percent = float(msg.get("progress_percent", 0))
                     await _save_watch_progress(msg["video_id"], progress_seconds, progress_percent)
-            except (json.JSONDecodeError, ValueError, TypeError):
-                pass
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                await log_event(
+                    f"WebSocket invalid message: error={type(e).__name__}: {e} payload_trimmed={repr(text[:500])}",
+                    SEVERITY_ERROR,
+                )
     except WebSocketDisconnect:
         pass
     finally:

@@ -3,6 +3,7 @@ import yt_dlp
 
 
 def get_channel_info_by_url(channel_url: str):
+    """Returns (info_dict, None) on success, (None, error_message) on failure."""
     try:
         ydl_opts = {
             "quiet": True,
@@ -14,7 +15,7 @@ def get_channel_info_by_url(channel_url: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             channel_info = ydl.extract_info(channel_url, download=False)
             if not channel_info:
-                return None
+                return None, "yt-dlp returned no channel_info"
             thumbnails = channel_info.get("thumbnails") or []
             banner = next((t for t in thumbnails if t.get("id") == "banner_uncropped"), None)
             avatar = next((t for t in thumbnails if t.get("id") == "avatar_uncropped"), None)
@@ -26,18 +27,19 @@ def get_channel_info_by_url(channel_url: str):
                 "description": channel_info.get("description"),
                 "banner_uncropped_url": banner.get("url") if banner else None,
                 "avatar_uncropped_url": avatar.get("url") if avatar else None,
-            }
+            }, None
     except Exception as e:
-        print(f"Error getting channel info: {e}")
-        return None
+        return None, f"{type(e).__name__}: {e}"
 
 
 def get_channel_info_by_yt_channel_id(yt_channel_id: str):
+    """Returns (info_dict, None) on success, (None, error_message) on failure."""
     url = f"https://www.youtube.com/channel/{yt_channel_id}"
     return get_channel_info_by_url(url)
 
 
 def get_channel_info_by_name(channel_name: str):
+    """Returns (info_dict, None) on success, (None, error_message) on failure."""
     if channel_name.startswith("@"):
         url = f"https://www.youtube.com/{channel_name}"
     else:
