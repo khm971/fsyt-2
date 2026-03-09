@@ -308,6 +308,8 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
     )
     furthest = await db_helpers.get_furthest_scheduled_job()
     furthest_time = furthest["run_after"] if furthest and furthest.get("run_after") else None
+    if furthest_time is not None and furthest_time.tzinfo is not None:
+        furthest_time = furthest_time.astimezone().replace(tzinfo=None)
     now = datetime.now()
     if furthest_time is not None and furthest_time < now:
         furthest_time = now
@@ -316,19 +318,31 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
         next_scheduled = furthest_time + timedelta(seconds=delay)
     else:
         next_scheduled = now
+    queued_count = 0
     for v in videos:
+        video_id = v["video_id"]
+        existing_job_id = await db_helpers.get_pending_download_video_job_id(video_id)
+        if existing_job_id is not None:
+            await log_event(
+                f"Job {job_id or '?'}: skipped queueing download_video for video_id={video_id} (already scheduled or running; conflicting job_id={existing_job_id})",
+                SEVERITY_INFO,
+                job_id=job_id,
+                video_id=video_id,
+            )
+            continue
         await db_helpers.add_video_job_to_queue(
-            "download_video", v["video_id"], run_after=next_scheduled, priority=priority
+            "download_video", video_id, run_after=next_scheduled, priority=priority
         )
+        queued_count += 1
         delay = random.randint(min_delay, max_delay)
         next_scheduled = next_scheduled + timedelta(seconds=delay)
     await broadcast_queue_update()
     await log_event(
-        f"Job {job_id or '?'}: queued {len(videos)} download_video jobs",
+        f"Job {job_id or '?'}: queued {queued_count} download_video jobs",
         SEVERITY_INFO,
         job_id=job_id,
     )
-    return len(videos)
+    return queued_count
 
 
 async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: int | None = None) -> str | None:
@@ -447,12 +461,14 @@ async def broadcast_transcode_status_changed() -> None:
 
 
 async def broadcast_queue_update() -> None:
+    total_row = await db.fetchrow("SELECT COUNT(*) AS total FROM job_queue")
+    total_count = int(total_row["total"] or 0)
     rows = await db.fetch(
         """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                   run_after, priority, scheduler_entry_id
-           FROM job_queue ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT 100"""
+           FROM job_queue ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT 500"""
     )
     jobs = [
         {
@@ -476,4 +492,9 @@ async def broadcast_queue_update() -> None:
         for r in rows
     ]
     heartbeat = await db_helpers.get_control_value("server_heartbeat")
-    await ws_manager.broadcast({"type": "queue_update", "jobs": jobs, "heartbeat": heartbeat})
+    await ws_manager.broadcast({
+        "type": "queue_update",
+        "jobs": jobs,
+        "total_count": total_count,
+        "heartbeat": heartbeat,
+    })

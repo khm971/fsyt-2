@@ -128,7 +128,14 @@ export default function Log({ setError }) {
                       {e.severity === 50 && "Critical"}
                     </span>
                   </td>
-                  <td className={cn("px-4 py-2", SEVERITY_COLORS[e.severity] ?? "text-gray-300")}>
+                  <td
+                    className={cn(
+                      "px-4 py-2",
+                      e.message === "Application starting, database connected"
+                        ? "text-green-400"
+                        : SEVERITY_COLORS[e.severity] ?? "text-gray-300"
+                    )}
+                  >
                     {e.message}
                   </td>
                   <td className="px-4 py-2">

@@ -68,7 +68,7 @@ async def _transcode_progress_broadcast_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
-    await log_event("Application starting, database connected", SEVERITY_DEBUG)
+    await log_event("Application starting, database connected", SEVERITY_NOTICE)
     await log_event("Running migrations", SEVERITY_DEBUG)
     try:
         await run_migrations()
@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
             SEVERITY_ERROR,
         )
         raise
-    await log_event("Migrations complete", SEVERITY_INFO)
+    await log_event("Migrations complete", SEVERITY_DEBUG)
     await run_startup_cleanup()
     await log_event("Starting job loop", SEVERITY_DEBUG)
     task = asyncio.create_task(run_job_loop())
@@ -87,10 +87,36 @@ async def lifespan(app: FastAPI):
     transcode_task = asyncio.create_task(_transcode_progress_broadcast_loop())
     await log_event("Starting scheduler", SEVERITY_DEBUG)
     await start_scheduler()
-    await log_event("System startup complete", SEVERITY_NOTICE)
+    await log_event("System startup complete", SEVERITY_INFO)
     try:
         yield
     finally:
+        # Log container shutdown with running job details (using existing logging system)
+        try:
+            running = await db.fetch(
+                """SELECT job_queue_id, job_type, video_id, channel_id, status_message, status_percent_complete
+                   FROM job_queue WHERE status = 'running' ORDER BY job_queue_id"""
+            )
+            count = len(running)
+            if count == 0:
+                msg = "Container stopping. 0 running jobs."
+            else:
+                parts = []
+                for r in running:
+                    s = f"id={r['job_queue_id']} type={r['job_type']!r} video_id={r['video_id']} channel_id={r['channel_id']}"
+                    if r["status_message"]:
+                        s += f" {r['status_message']}"
+                    if r["status_percent_complete"] is not None:
+                        s += f" ({r['status_percent_complete']}%)"
+                    parts.append(s)
+                details = "; ".join(parts)
+                msg = f"Container stopping. {count} running job(s): {details}"
+            await log_event(msg, SEVERITY_NOTICE)
+        except Exception as e:
+            await log_event(
+                f"Container stopping (could not list running jobs: {type(e).__name__}: {e})",
+                SEVERITY_NOTICE,
+            )
         shutdown_scheduler()
         task.cancel()
         progress_task.cancel()

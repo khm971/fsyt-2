@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from database import db
-from api.schemas import JobQueueCreate, JobQueueResponse
+from api.schemas import JobQueueCreate, JobQueueListResponse, JobQueueResponse, JobQueueUpdate
 from job_processor import broadcast_queue_update
 from log_helper import log_event, SEVERITY_INFO
 
@@ -34,31 +34,37 @@ def row_to_job(r) -> JobQueueResponse:
     )
 
 
-@router.get("", response_model=list[JobQueueResponse])
+@router.get("", response_model=JobQueueListResponse)
 async def list_jobs(
     status: str | None = Query(None),
     scheduler_entry_id: int | None = Query(None),
-    limit: int = Query(100, le=500),
+    limit: int = Query(500, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    q = """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, status, status_percent_complete, status_message,
-                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id
-           FROM job_queue WHERE 1=1"""
+    where = "WHERE 1=1"
     params = []
     i = 1
     if status:
-        q += f" AND status = ${i}"
+        where += f" AND status = ${i}"
         params.append(status)
         i += 1
     if scheduler_entry_id is not None:
-        q += f" AND scheduler_entry_id = ${i}"
+        where += f" AND scheduler_entry_id = ${i}"
         params.append(scheduler_entry_id)
         i += 1
-    q += f" ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT ${i}"
-    params.append(limit)
+    total_row = await db.fetchrow(
+        f"SELECT COUNT(*) AS total FROM job_queue {where}", *params
+    )
+    total = int(total_row["total"] or 0)
+    q = f"""SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                  parameter, extended_parameters, status, status_percent_complete, status_message,
+                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                  run_after, priority, scheduler_entry_id
+           FROM job_queue {where}
+           ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT ${i} OFFSET ${i + 1}"""
+    params.extend([limit, offset])
     rows = await db.fetch(q, *params)
-    return [row_to_job(r) for r in rows]
+    return JobQueueListResponse(items=[row_to_job(r) for r in rows], total=total)
 
 
 @router.get("/{job_id}", response_model=JobQueueResponse)
@@ -101,6 +107,56 @@ async def create_job(body: JobQueueCreate):
     j = row_to_job(row)
     await log_event(f"Job queued: {j.job_type} (ID {j.job_queue_id}, video_id={j.video_id}, channel_id={j.channel_id})", SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id)
     return j
+
+
+@router.patch("/{job_id}", response_model=JobQueueResponse)
+async def update_job(job_id: int, body: JobQueueUpdate):
+    """Update run_after and/or priority. Only jobs with status='new' can be updated."""
+    # Check job exists and get current state
+    r = await db.fetchrow(
+        """SELECT job_queue_id, status, run_after, priority FROM job_queue WHERE job_queue_id = $1""",
+        job_id,
+    )
+    if not r:
+        raise HTTPException(404, "Job not found")
+    if r["status"] != "new":
+        raise HTTPException(400, "Only jobs with status 'new' can be updated")
+    provided = body.model_dump(exclude_unset=True)
+    updates = []
+    params = []
+    i = 1
+    if "run_after" in provided:
+        updates.append(f"run_after = ${i}")
+        params.append(provided["run_after"])  # None clears the date
+        i += 1
+    if "priority" in provided and provided["priority"] is not None:
+        p = provided["priority"]
+        if not (1 <= p <= 100):
+            raise HTTPException(400, "Priority must be between 1 and 100 (1 = highest)")
+        updates.append(f"priority = ${i}")
+        params.append(p)
+        i += 1
+    if not updates:
+        # No changes; return current job
+        return row_to_job(await db.fetchrow(
+            """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                      parameter, extended_parameters, status, status_percent_complete, status_message,
+                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                      run_after, priority, scheduler_entry_id
+               FROM job_queue WHERE job_queue_id = $1""",
+            job_id,
+        ))
+    params.append(job_id)
+    row = await db.fetchrow(
+        f"""UPDATE job_queue SET {", ".join(updates)}, last_update = NOW() WHERE job_queue_id = ${i}
+           RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                     parameter, extended_parameters, status, status_percent_complete, status_message,
+                     last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                     run_after, priority, scheduler_entry_id""",
+        *params,
+    )
+    await broadcast_queue_update()
+    return row_to_job(row)
 
 
 @router.patch("/{job_id}/acknowledge", response_model=JobQueueResponse)

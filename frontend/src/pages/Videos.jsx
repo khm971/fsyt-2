@@ -1,8 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { cn } from "../lib/utils";
-import { Plus, Trash2, Download, FileSearch, EyeOff, Eye, Play, ArrowUp, ArrowDown, ArrowUpDown, Film } from "lucide-react";
+import { cn, formatDateTimeWithSeconds } from "../lib/utils";
+import {
+  Plus, Trash2, Download, FileSearch, EyeOff, Eye, Play, ArrowUp, ArrowDown, ArrowUpDown, Film,
+  CheckCircle, Loader2, Search, FileCheck, Brain, Settings, XCircle, AlertCircle, HelpCircle,
+  ListTodo, CalendarClock, MessageCircle, AlertTriangle, CircleDot,
+} from "lucide-react";
 
 const STATUS_LABELS = {
   available: "Available",
@@ -20,14 +24,57 @@ const STATUS_LABELS = {
   running: "Running",
 };
 
+const STATUS_ICONS = {
+  available: CheckCircle,
+  no_metadata: CircleDot,
+  initial_metadata_load: Loader2,
+  getting_metadata: Search,
+  get_metadata_for_download: Download,
+  metadata_available: FileCheck,
+  llm_processing: Brain,
+  downloading: Download,
+  post_download_processing: Settings,
+  error: XCircle,
+  error_getting_metadata: AlertCircle,
+  download_error: AlertCircle,
+  running: Play,
+};
+
+function getStatusColor(status) {
+  if (!status) return "text-gray-500";
+  if (status === "available") return "text-green-400";
+  if (status === "no_metadata") return "text-white";
+  if (["running", "downloading", "getting_metadata", "get_metadata_for_download", "post_download_processing", "llm_processing"].includes(status)) return "text-blue-400";
+  if (status === "error" || status.startsWith("error")) return "text-red-400";
+  return "text-gray-500";
+}
+
 function formatStatus(s) {
   if (!s) return "—";
   return STATUS_LABELS[s] ?? s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const JOB_TYPE_ICONS = {
+  download_video: Download,
+  get_metadata: FileSearch,
+  fill_missing_metadata: FileSearch,
+  download_channel_artwork: Download,
+  download_one_channel: Download,
+  download_auto_enabled_channels: Download,
+  update_channel_info: Settings,
+  add_video_from_frontend: Plus,
+  add_video_from_playlist: Plus,
+  transcode_video_for_ipad: Film,
+  queue_all_downloads: ListTodo,
+};
+function getJobTypeIcon(jobType) {
+  return JOB_TYPE_ICONS[jobType] ?? ListTodo;
 }
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
 import VideoPlayer from "../components/VideoPlayer";
+import { JobDetailsModal } from "../components/JobDetailsModal";
 
 export default function Videos({ setError }) {
   const toast = useToast();
@@ -42,7 +89,8 @@ export default function Videos({ setError }) {
   const [sortOrder, setSortOrder] = useState("desc");
   const [addForm, setAddForm] = useState({ provider_key: "", queue_download: true });
   const [playingVideo, setPlayingVideo] = useState(null);
-  const { videoUpdatedAt, videoProgressOverrides } = useQueueWebSocket();
+  const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
 
   const loadVideos = useCallback(async () => {
     try {
@@ -207,7 +255,7 @@ export default function Videos({ setError }) {
               </th>
               <th className="px-4 py-3 font-medium">
                 <div className="flex items-center gap-1">
-                  Status
+                  Flags
                   <Tooltip title={sortBy === "status" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Status"}>
                     <button
                       type="button"
@@ -231,6 +279,20 @@ export default function Videos({ setError }) {
               const status = override?.status ?? v.status;
               const percent = override?.status_percent_complete ?? v.status_percent_complete;
               const showProgress = ["downloading", "get_metadata_for_download", "post_download_processing", "getting_metadata", "llm_processing"].includes(status) && (percent != null || status === "downloading");
+              const pendingJobFromApi = v.pending_job_id != null && v.pending_job_type != null
+                ? { job_queue_id: v.pending_job_id, job_type: v.pending_job_type }
+                : null;
+              const pendingJobFromWs = jobs
+                .filter((j) => j.video_id === v.video_id && (j.status === "new" || j.status === "running"))
+                .sort((a, b) => {
+                  const aT = a.last_update ? new Date(a.last_update).getTime() : 0;
+                  const bT = b.last_update ? new Date(b.last_update).getTime() : 0;
+                  if (bT !== aT) return bT - aT;
+                  return (b.job_queue_id ?? 0) - (a.job_queue_id ?? 0);
+                })[0] ?? null;
+              const pendingJob = pendingJobFromApi ?? pendingJobFromWs;
+              const StatusIconComponent = status ? (STATUS_ICONS[status] ?? HelpCircle) : HelpCircle;
+              const statusTooltip = [formatStatus(status), v.status_message].filter(Boolean).join(" — ");
               return (
               <tr key={v.video_id} className="hover:bg-gray-800/30">
                 <td className="px-4 py-2 font-mono text-gray-300">{v.video_id}</td>
@@ -240,15 +302,9 @@ export default function Videos({ setError }) {
                 <td className="px-4 py-2 min-w-[140px]">
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-1.5">
-                      <Tooltip title={v.status_message || ""}>
-                        <span className={cn(
-                          status === "available" && "text-green-400",
-                          (status === "running" || status === "downloading" || status === "getting_metadata" || status === "get_metadata_for_download" || status === "post_download_processing" || status === "llm_processing") && "text-blue-400",
-                          status === "error" && "text-red-400",
-                          status && status.startsWith("error") && "text-red-400",
-                          !status && "text-gray-500"
-                        )}>
-                          {formatStatus(status)}
+                      <Tooltip title={statusTooltip || "Status"}>
+                        <span className={cn("inline-flex shrink-0", getStatusColor(status))}>
+                          <StatusIconComponent className="w-4 h-4" />
                         </span>
                       </Tooltip>
                       {v.transcode_path && (
@@ -258,6 +314,21 @@ export default function Videos({ setError }) {
                           </span>
                         </Tooltip>
                       )}
+                      {pendingJob && (() => {
+                        const JobIconComponent = getJobTypeIcon(pendingJob.job_type);
+                        const jobTooltip = `Job #${pendingJob.job_queue_id}: ${pendingJob.job_type}${pendingJob.status ? ` (${pendingJob.status})` : ""}`;
+                        return (
+                          <Tooltip title={jobTooltip}>
+                            <button
+                              type="button"
+                              onClick={() => setJobQueueIdForModal(pendingJob.job_queue_id)}
+                              className="inline-flex text-purple-400 hover:text-purple-300 hover:bg-gray-700 rounded p-0.5 shrink-0"
+                            >
+                              <JobIconComponent className="w-4 h-4" />
+                            </button>
+                          </Tooltip>
+                        );
+                      })()}
                     </div>
                     {showProgress && (
                       <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
@@ -393,6 +464,14 @@ export default function Videos({ setError }) {
           </div>
         </div>
       )}
+
+      <JobDetailsModal
+        jobId={jobQueueIdForModal}
+        onClose={() => setJobQueueIdForModal(null)}
+        setError={setError}
+        toast={toast}
+        onJobCanceled={loadVideos}
+      />
     </div>
   );
 }

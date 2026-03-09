@@ -82,11 +82,13 @@ export const api = {
       if (params.status) q.set("status", params.status);
       if (params.scheduler_entry_id != null) q.set("scheduler_entry_id", params.scheduler_entry_id);
       if (params.limit != null) q.set("limit", params.limit);
+      if (params.offset != null) q.set("offset", params.offset);
       const query = q.toString();
       return apiFetch(`/queue${query ? `?${query}` : ""}`);
     },
     get: (id) => apiFetch(`/queue/${id}`),
     create: (body) => apiFetch("/queue", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => apiFetch(`/queue/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     acknowledge: (id) => apiFetch(`/queue/${id}/acknowledge`, { method: "PATCH" }),
     unacknowledge: (id) => apiFetch(`/queue/${id}/unacknowledge`, { method: "PATCH" }),
     cancel: (id) => apiFetch(`/queue/${id}/cancel`, { method: "POST" }),
@@ -111,6 +113,10 @@ export const api = {
   },
 
   maintenance: {
+    getCancelPendingFutureJobsPreview: () =>
+      apiFetch("/maintenance/cancel-pending-future-jobs/preview"),
+    cancelPendingFutureJobs: () =>
+      apiFetch("/maintenance/cancel-pending-future-jobs", { method: "POST" }),
     clearTranscodes: () => apiFetch("/maintenance/clear-transcodes", { method: "POST" }),
     clearWatchHistory: () => apiFetch("/maintenance/clear-watch-history", { method: "POST" }),
   },

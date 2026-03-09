@@ -76,6 +76,8 @@ class VideoResponse(VideoBase):
     watch_progress_percent: Optional[float] = None
     watch_progress_seconds: Optional[int] = None
     watch_is_finished: Optional[bool] = None
+    pending_job_id: Optional[int] = None
+    pending_job_type: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -92,6 +94,11 @@ class JobQueueCreate(BaseModel):
     run_after: Optional[datetime] = None
     priority: int = 50
     scheduler_entry_id: Optional[int] = None
+
+
+class JobQueueUpdate(BaseModel):
+    run_after: Optional[datetime] = None
+    priority: Optional[int] = None
 
 
 class JobQueueResponse(BaseModel):
@@ -117,6 +124,11 @@ class JobQueueResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class JobQueueListResponse(BaseModel):
+    items: list[JobQueueResponse]
+    total: int
 
 
 # ----- Scheduler entry -----

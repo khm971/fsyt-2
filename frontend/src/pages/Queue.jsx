@@ -1,23 +1,69 @@
 import { useState, useEffect, useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { cn, formatDateTimeWithSeconds } from "../lib/utils";
-import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock } from "lucide-react";
+import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock, Search, Filter, CheckCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
+import { JobDetailsModal } from "../components/JobDetailsModal";
 
 export default function Queue({ setError }) {
   const toast = useToast();
-  const { jobs, status: wsStatus, queueUpdatedAt } = useQueueWebSocket();
+  const [searchParams] = useSearchParams();
+  const filterWarningsAndErrors = searchParams.get("filter") === "warnings_and_errors";
+  const filterQueued = searchParams.get("filter") === "queued";
+  const PAGE_SIZE = 500;
+  const { jobs, totalCount, status: wsStatus, queueUpdatedAt } = useQueueWebSocket();
   const [control, setControl] = useState({});
   const [paused, setPaused] = useState(false);
   const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", priority: 50 });
   const [showAdd, setShowAdd] = useState(false);
+  const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const [showAckAllModal, setShowAckAllModal] = useState(false);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("desc");
+  const [page, setPage] = useState(1);
+  const [pageJobs, setPageJobs] = useState([]);
+  const [pageLoading, setPageLoading] = useState(false);
+
+  const displayJobs = page === 1 ? jobs : pageJobs;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  useEffect(() => {
+    if (page <= 1) return;
+    setPageLoading(true);
+    api.queue
+      .list({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .then((res) => {
+        setPageJobs(res.items || []);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setPageLoading(false));
+  }, [page, queueUpdatedAt]);
+
+  useEffect(() => {
+    if (totalCount > 0 && page > totalPages) setPage(totalPages);
+  }, [totalCount, totalPages, page]);
+
+  const unackCounts = useMemo(() => {
+    const unack = displayJobs.filter((j) => !j.acknowledge_flag && (j.error_flag || j.warning_flag));
+    return {
+      warningsOnly: unack.filter((j) => j.warning_flag && !j.error_flag).length,
+      errorsOnly: unack.filter((j) => j.error_flag && !j.warning_flag).length,
+      both: unack.filter((j) => j.warning_flag && j.error_flag).length,
+      total: unack.length,
+    };
+  }, [displayJobs]);
 
   const sortedJobs = useMemo(() => {
-    const copy = [...jobs];
+    let list = displayJobs;
+    if (filterWarningsAndErrors) {
+      list = list.filter((j) => j.error_flag || j.warning_flag);
+    } else if (filterQueued) {
+      list = list.filter((j) => j.status === "new");
+    }
+    const copy = [...list];
     copy.sort((a, b) => {
       let aVal, bVal;
       if (sortBy === "id") {
@@ -49,7 +95,7 @@ export default function Queue({ setError }) {
       return 0;
     });
     return copy;
-  }, [jobs, sortBy, sortOrder]);
+  }, [displayJobs, sortBy, sortOrder, filterWarningsAndErrors, filterQueued]);
 
   useEffect(() => {
     api.control
@@ -102,6 +148,30 @@ export default function Queue({ setError }) {
     }
   };
 
+  const acknowledgeAll = async (mode) => {
+    const unack = jobs.filter((j) => !j.acknowledge_flag && (j.error_flag || j.warning_flag));
+    let ids = [];
+    if (mode === "warnings") {
+      ids = unack.filter((j) => j.warning_flag).map((j) => j.job_queue_id);
+    } else if (mode === "errors") {
+      ids = unack.filter((j) => j.error_flag).map((j) => j.job_queue_id);
+    } else {
+      ids = unack.map((j) => j.job_queue_id);
+    }
+    setShowAckAllModal(false);
+    if (ids.length === 0) {
+      toast.addToast("No jobs to acknowledge", "info");
+      return;
+    }
+    try {
+      await Promise.all(ids.map((id) => api.queue.acknowledge(id)));
+      toast.addToast(`Acknowledged ${ids.length} job${ids.length === 1 ? "" : "s"}`, "success");
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+    }
+  };
+
   const addJob = async () => {
     try {
       const body = {
@@ -129,6 +199,18 @@ export default function Queue({ setError }) {
           <span className="text-red-300 text-sm">
             Too many chargeable errors. The job processor has stopped.
           </span>
+        </div>
+      )}
+      {(filterWarningsAndErrors || filterQueued) && (
+        <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center justify-between gap-3">
+          <span className="text-gray-300 text-sm flex items-center gap-2">
+            <Filter className="w-4 h-4 text-blue-400" />
+            {filterWarningsAndErrors && "Showing only jobs with errors or warnings"}
+            {filterQueued && "Showing only queued jobs"}
+          </span>
+          <Link to="/queue" className="text-sm text-blue-400 hover:text-blue-300">
+            Clear filter
+          </Link>
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -166,13 +248,61 @@ export default function Queue({ setError }) {
             {paused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
             {paused ? "Resume" : "Pause"}
           </button>
+          {unackCounts.total > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAckAllModal(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-500 text-white"
+            >
+              <CheckCheck className="w-4 h-4" />
+              Acknowledge all
+            </button>
+          )}
           <button type="button" onClick={() => setShowAdd(true)} className="btn-primary">
             Add job
           </button>
         </div>
       </div>
 
+      {totalCount > PAGE_SIZE && (
+        <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-3 bg-gray-800/60 border border-gray-700 rounded-lg">
+          <span className="text-sm text-gray-400">
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalCount)} of {totalCount} jobs
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-700"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Previous
+            </button>
+            <span className="text-sm text-gray-400 px-1">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-700"
+            >
+              Next
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
+        {pageLoading && (
+          <div className="flex items-center justify-center py-8 text-gray-400 text-sm">
+            Loading page…
+          </div>
+        )}
+        {!pageLoading && (
+        <>
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/80 text-gray-400">
             <tr>
@@ -384,6 +514,15 @@ export default function Queue({ setError }) {
                   </div>
                 </td>
                 <td className="px-4 py-2 flex gap-1 flex-nowrap">
+                  <Tooltip title="Job details" side="top">
+                    <button
+                      type="button"
+                      onClick={() => setJobQueueIdForModal(j.job_queue_id)}
+                      className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded"
+                    >
+                      <Search className="w-4 h-4" />
+                    </button>
+                  </Tooltip>
                   {(j.error_flag || j.warning_flag) && (
                     <Tooltip title={j.acknowledge_flag ? "Unacknowledge" : "Acknowledge"} side="top">
                       <button
@@ -417,7 +556,73 @@ export default function Queue({ setError }) {
         {sortedJobs.length === 0 && (
           <div className="px-4 py-8 text-center text-gray-500">No jobs. Connect WebSocket or add a job.</div>
         )}
+        </>
+        )}
       </div>
+
+      {showAckAllModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowAckAllModal(false)}>
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-w-md w-full mx-4 p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-medium text-white mb-2">Acknowledge all</h3>
+            <p className="text-sm text-gray-400 mb-4">Choose which unacknowledged jobs to acknowledge:</p>
+            <div className="space-y-2 mb-4">
+              {unackCounts.warningsOnly + unackCounts.both > 0 && (
+                <button
+                  type="button"
+                  onClick={() => acknowledgeAll("warnings")}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg text-left text-sm font-medium bg-yellow-900/40 hover:bg-yellow-800/50 text-yellow-200 border border-yellow-700/50"
+                >
+                  <span className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4" />
+                    Warnings only
+                  </span>
+                  <span className="text-yellow-400/80">
+                    {unackCounts.warningsOnly + unackCounts.both} job{(unackCounts.warningsOnly + unackCounts.both) === 1 ? "" : "s"}
+                  </span>
+                </button>
+              )}
+              {unackCounts.errorsOnly + unackCounts.both > 0 && (
+                <button
+                  type="button"
+                  onClick={() => acknowledgeAll("errors")}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg text-left text-sm font-medium bg-red-900/40 hover:bg-red-800/50 text-red-200 border border-red-700/50"
+                >
+                  <span className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4" />
+                    Errors only
+                  </span>
+                  <span className="text-red-400/80">
+                    {unackCounts.errorsOnly + unackCounts.both} job{(unackCounts.errorsOnly + unackCounts.both) === 1 ? "" : "s"}
+                  </span>
+                </button>
+              )}
+              {unackCounts.total > 0 && (
+                <button
+                  type="button"
+                  onClick={() => acknowledgeAll("both")}
+                  className="w-full flex items-center justify-between px-4 py-3 rounded-lg text-left text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600"
+                >
+                  <span className="flex items-center gap-2">
+                    <CheckCheck className="w-4 h-4" />
+                    Both (warnings and errors)
+                  </span>
+                  <span className="text-gray-400">
+                    {unackCounts.total} job{unackCounts.total === 1 ? "" : "s"}
+                  </span>
+                </button>
+              )}
+            </div>
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setShowAckAllModal(false)} className="btn-secondary">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowAdd(false)}>
@@ -475,6 +680,13 @@ export default function Queue({ setError }) {
           </div>
         </div>
       )}
+
+      <JobDetailsModal
+        jobId={jobQueueIdForModal}
+        onClose={() => setJobQueueIdForModal(null)}
+        setError={setError}
+        toast={toast}
+      />
     </div>
   );
 }

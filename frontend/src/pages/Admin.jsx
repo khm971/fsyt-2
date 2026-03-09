@@ -44,11 +44,11 @@ export default function Admin({ setError }) {
             <AdminNavLink to="/admin/control-values" icon={SlidersHorizontal}>
               Control Values
             </AdminNavLink>
-            <AdminNavLink to="/admin/maintenance" icon={Wrench}>
-              Maintenance
-            </AdminNavLink>
             <AdminNavLink to="/admin/job-scheduler" icon={CalendarClock}>
               Job Scheduler
+            </AdminNavLink>
+            <AdminNavLink to="/admin/maintenance" icon={Wrench}>
+              Maintenance
             </AdminNavLink>
           </nav>
         </aside>

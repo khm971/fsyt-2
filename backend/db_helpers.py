@@ -262,6 +262,17 @@ async def get_furthest_scheduled_job():
     )
 
 
+async def get_pending_download_video_job_id(video_id: int) -> int | None:
+    """Return job_queue_id of an existing new or running download_video job for this video, or None."""
+    row = await db.fetchrow(
+        """SELECT job_queue_id FROM job_queue
+           WHERE job_type = 'download_video' AND video_id = $1 AND status IN ('new', 'running')
+           LIMIT 1""",
+        video_id,
+    )
+    return row["job_queue_id"] if row else None
+
+
 async def add_video_job_to_queue(job_type: str, video_id: int, run_after=None, priority: int = 50):
     await db.execute(
         """INSERT INTO job_queue (job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,

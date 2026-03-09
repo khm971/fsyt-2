@@ -1,8 +1,9 @@
 /**
  * Tooltip with offset from the trigger to avoid being covered by large cursors.
  * Positions above the element by default with ~8px gap.
+ * Use wrap={true} to allow title to wrap (whitespace-normal + max-width) so it fits in tight spaces.
  */
-export function Tooltip({ children, title, side = "top" }) {
+export function Tooltip({ children, title, side = "top", wrap = false }) {
   if (!title) return children;
 
   const sideClasses = {
@@ -16,7 +17,7 @@ export function Tooltip({ children, title, side = "top" }) {
     <span className="relative group/tooltip inline-flex">
       {children}
       <span
-        className={`absolute ${sideClasses[side]} px-3 py-1.5 rounded-md bg-gray-800 text-gray-100 text-xs whitespace-nowrap opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-opacity duration-150 pointer-events-none z-50 border border-gray-700 shadow-lg`}
+        className={`absolute ${sideClasses[side]} px-3 py-1.5 rounded-md bg-gray-800 text-gray-100 text-xs opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-opacity duration-150 pointer-events-none z-50 border border-gray-700 shadow-lg ${wrap ? "whitespace-normal max-w-[180px] text-left" : "whitespace-nowrap"}`}
       >
         {title}
       </span>

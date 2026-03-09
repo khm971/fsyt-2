@@ -7,6 +7,7 @@ const QueueWebSocketContext = createContext(null);
 
 export function QueueWebSocketProvider({ children }) {
   const [jobs, setJobs] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [status, setStatus] = useState("connecting");
   const [videoUpdatedAt, setVideoUpdatedAt] = useState(0);
   const [queueUpdatedAt, setQueueUpdatedAt] = useState(0);
@@ -54,6 +55,7 @@ export function QueueWebSocketProvider({ children }) {
         const msg = JSON.parse(event.data);
         if (msg.type === "queue_update" && Array.isArray(msg.jobs)) {
           setJobs(msg.jobs);
+          setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
         }
@@ -102,6 +104,7 @@ export function QueueWebSocketProvider({ children }) {
 
   const value = {
     jobs,
+    totalCount,
     status,
     videoUpdatedAt,
     queueUpdatedAt,

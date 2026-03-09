@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
 import { formatDateTime } from "../lib/utils";
-import { CalendarClock, Pencil, Trash2, History } from "lucide-react";
+import { CalendarClock, Pencil, Trash2, History, Search } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import Modal from "../components/Modal";
 import { Tooltip } from "../components/Tooltip";
+import { JobDetailsModal } from "../components/JobDetailsModal";
 import ScheduleBuilder, { cronToDescription } from "../components/ScheduleBuilder";
 
 const JOB_TYPES = [
@@ -64,6 +65,7 @@ export default function JobScheduler({ setError }) {
   const [historyEntryId, setHistoryEntryId] = useState(null);
   const [historyJobs, setHistoryJobs] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [channels, setChannels] = useState([]);
   const [videos, setVideos] = useState([]);
 
@@ -376,7 +378,7 @@ export default function JobScheduler({ setError }) {
           {historyLoading ? (
             <p className="text-gray-400">Loading…</p>
           ) : (
-            <div className="overflow-x-auto max-h-96">
+            <div className="overflow-x-hidden overflow-y-auto max-h-96">
               <table className="w-full text-left text-sm">
                 <thead className="text-gray-400 border-b border-gray-800 sticky top-0 bg-gray-900">
                   <tr>
@@ -384,6 +386,7 @@ export default function JobScheduler({ setError }) {
                     <th className="pb-2 pr-3 font-medium">Type</th>
                     <th className="pb-2 pr-3 font-medium">Status</th>
                     <th className="pb-2 pr-3 font-medium">Created</th>
+                    <th className="pb-2 pr-3 font-medium w-10"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">
@@ -393,6 +396,17 @@ export default function JobScheduler({ setError }) {
                       <td className="py-2 pr-3 text-white">{j.job_type}</td>
                       <td className="py-2 pr-3 text-gray-400">{j.status}</td>
                       <td className="py-2 pr-3 text-gray-400">{formatDateTime(j.record_created)}</td>
+                      <td className="py-2 pr-3">
+                        <Tooltip title="Job details" side="left">
+                          <button
+                            type="button"
+                            onClick={() => setJobQueueIdForModal(j.job_queue_id)}
+                            className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded"
+                          >
+                            <Search className="w-4 h-4" />
+                          </button>
+                        </Tooltip>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -409,6 +423,13 @@ export default function JobScheduler({ setError }) {
           </div>
         </Modal>
       )}
+
+      <JobDetailsModal
+        jobId={jobQueueIdForModal}
+        onClose={() => setJobQueueIdForModal(null)}
+        setError={setError}
+        toast={toast}
+      />
     </div>
   );
 }

@@ -55,6 +55,8 @@ def row_to_video(r) -> VideoResponse:
         watch_progress_percent=r.get("watch_progress_percent"),
         watch_progress_seconds=r.get("watch_progress_seconds"),
         watch_is_finished=r.get("watch_is_finished"),
+        pending_job_id=r.get("pending_job_id"),
+        pending_job_type=r.get("pending_job_type"),
     )
 
 
@@ -69,12 +71,13 @@ async def list_videos(
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
+                  jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished
            FROM video v
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -101,13 +104,14 @@ async def list_watch_in_progress(limit: int = Query(250, le=500)):
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
+                  jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
            FROM video v
            INNER JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -555,10 +559,11 @@ async def get_video(video_id: int):
         """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
+                  jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written
            FROM video v
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true

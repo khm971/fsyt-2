@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
+import { useToast } from "../context/ToastContext";
 import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter } from "../lib/utils";
-import { Activity, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, CalendarClock } from "lucide-react";
+import { Activity, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock } from "lucide-react";
+import { Tooltip } from "../components/Tooltip";
+import { JobDetailsModal } from "../components/JobDetailsModal";
 
 const SEVERITY_COLORS = {
   5: "text-gray-500",
@@ -17,11 +20,13 @@ const SEVERITY_COLORS = {
 
 
 export default function Dashboard({ setError }) {
+  const toast = useToast();
   const [control, setControl] = useState({});
   const [logEntries, setLogEntries] = useState([]);
   const [statusData, setStatusData] = useState({ transcodes: [], websocket_connections: 0 });
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
+  const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat } = useQueueWebSocket();
 
   useEffect(() => {
@@ -72,11 +77,16 @@ export default function Dashboard({ setError }) {
   };
 
   const heartbeat = serverHeartbeat ?? control.server_heartbeat?.value;
+  const heartbeatAgeMs = heartbeat != null ? now.getTime() - new Date(heartbeat).getTime() : null;
+  const heartbeatCurrent = heartbeatAgeMs != null && heartbeatAgeMs <= 30_000;
+  const heartbeatStale = heartbeatAgeMs != null && heartbeatAgeMs > 30_000 && heartbeatAgeMs <= 5 * 60 * 1000;
+  const heartbeatOld = heartbeatAgeMs != null && heartbeatAgeMs > 5 * 60 * 1000;
   const queuePaused = control.queue_paused?.value === "true";
   const chargeableErrorsLockout = control.chargeable_errors_lockout?.value === "true";
   const running = jobs.filter((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "new");
-  const errors = jobs.filter((j) => j.error_flag);
+  const errors = jobs.filter((j) => j.error_flag && !j.acknowledge_flag);
+  const warnings = jobs.filter((j) => j.warning_flag && !j.acknowledge_flag);
   const futureScheduled = jobs.filter(
     (j) => j.run_after != null && new Date(j.run_after) > now
   );
@@ -111,56 +121,74 @@ export default function Dashboard({ setError }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
-            <Activity className="w-4 h-4" />
-            WebSocket
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "w-2 h-2 rounded-full",
-                wsStatus === "open" && "bg-green-500",
-                wsStatus === "connecting" && "bg-yellow-500",
-                wsStatus === "closed" && "bg-red-500"
-              )}
-            />
-            <span className="text-white">{wsStatus}</span>
-          </div>
-        </div>
-
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="text-gray-400 text-sm mb-1">Queue status</div>
-          <div className="text-white">
-            {chargeableErrorsLockout ? (
-              <span className="text-red-400 font-medium">Locked out</span>
-            ) : queuePaused ? (
-              <span className="text-yellow-400 font-medium">Paused</span>
-            ) : (
-              "Running"
-            )}
-          </div>
-        </div>
-
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
+          <Link
+            to="/queue"
+            className="flex items-center gap-2 text-gray-400 text-sm mb-2 hover:text-gray-300"
+          >
             <ListTodo className="w-4 h-4" />
             Jobs
-          </div>
+          </Link>
           <div className="text-white text-sm space-y-1.5">
             <div className="flex items-center gap-3 flex-wrap">
-              <span className="flex items-center gap-1.5">
-                <PlayCircle className="w-3.5 h-3.5 text-green-400" />
-                {running.length} running
-              </span>
-              <span className="flex items-center gap-1.5 text-gray-300">
-                <Clock className="w-3.5 h-3.5" />
-                {queued.length} queued
-              </span>
+              {running.length > 0 ? (
+                <Tooltip
+                  title={
+                    running[0].status_percent_complete != null
+                      ? `${running[0].job_type} (${running[0].status_percent_complete}%)`
+                      : running[0].job_type
+                  }
+                  side="top"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setJobQueueIdForModal(running[0].job_queue_id)}
+                    className="flex items-center gap-1.5 text-green-400 hover:text-green-300 text-left"
+                  >
+                    <PlayCircle className="w-3.5 h-3.5" />
+                    {running.length} running
+                  </button>
+                </Tooltip>
+              ) : (
+                <span className="flex items-center gap-1.5 text-gray-300">
+                  <PlayCircle className="w-3.5 h-3.5" />
+                  {running.length} running
+                </span>
+              )}
+              {queued.length > 0 ? (
+                <Link
+                  to="/queue?filter=queued"
+                  className="flex items-center gap-1.5 text-gray-300 hover:text-white"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  {queued.length} queued
+                </Link>
+              ) : (
+                <span className="flex items-center gap-1.5 text-gray-300">
+                  <Clock className="w-3.5 h-3.5" />
+                  {queued.length} queued
+                </span>
+              )}
             </div>
-            {errors.length > 0 && (
-              <div className="flex items-center gap-1.5 text-red-400">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                {errors.length} error{errors.length !== 1 ? "s" : ""}
+            {(errors.length > 0 || warnings.length > 0) && (
+              <div className="flex items-center gap-2 flex-wrap">
+                {errors.length > 0 && (
+                  <Link
+                    to="/queue?filter=warnings_and_errors"
+                    className="flex items-center gap-1.5 text-red-400 hover:text-red-300"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    {errors.length} error{errors.length !== 1 ? "s" : ""}
+                  </Link>
+                )}
+                {warnings.length > 0 && (
+                  <Link
+                    to="/queue?filter=warnings_and_errors"
+                    className="flex items-center gap-1.5 text-yellow-400 hover:text-yellow-300"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {warnings.length} warning{warnings.length !== 1 ? "s" : ""}
+                  </Link>
+                )}
               </div>
             )}
             {futureScheduled.length > 0 && nextScheduledRunAfter != null && (
@@ -188,16 +216,54 @@ export default function Dashboard({ setError }) {
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="text-gray-400 text-sm mb-1">Last heartbeat</div>
-          <div className="text-white text-sm font-mono">
-            {heartbeat ? (
-              <>
-                {formatHeartbeatTime(heartbeat)}{" "}
-                <span className="text-gray-400 font-normal">{formatRelativeTime(heartbeat, now)}</span>
-              </>
-            ) : (
-              "—"
-            )}
+          <div className="text-gray-400 text-sm mb-2">Job Processor</div>
+          <div className="text-white text-sm space-y-1.5">
+            <div>
+              {chargeableErrorsLockout ? (
+                <span className="text-red-400 font-medium">Locked out</span>
+              ) : queuePaused ? (
+                <span className="text-yellow-400 font-medium">Paused</span>
+              ) : (
+                "Running"
+              )}
+            </div>
+            <div className="font-mono text-gray-300">
+              {heartbeat ? (
+                <>
+                  {formatHeartbeatTime(heartbeat)}{" "}
+                  <span
+                    className={cn(
+                      "font-normal",
+                      heartbeatCurrent && "text-green-400",
+                      heartbeatStale && "text-yellow-400",
+                      heartbeatOld && "text-red-400"
+                    )}
+                  >
+                    ({heartbeatCurrent ? "Current" : formatRelativeTime(heartbeat, now)})
+                  </span>
+                </>
+              ) : (
+                "—"
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+          <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
+            <Activity className="w-4 h-4" />
+            WebSocket
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "w-2 h-2 rounded-full",
+                wsStatus === "open" && "bg-green-500",
+                wsStatus === "connecting" && "bg-yellow-500",
+                wsStatus === "closed" && "bg-red-500"
+              )}
+            />
+            <span className="text-white">{wsStatus}</span>
           </div>
         </div>
 
@@ -263,7 +329,9 @@ export default function Dashboard({ setError }) {
                 title={`Severity: ${e.severity}, Job ID: ${e.job_id ?? "—"}, Video ID: ${e.video_id ?? "—"}, Channel ID: ${e.channel_id ?? "—"}`}
                 className={cn(
                   "flex gap-2 truncate items-center",
-                  SEVERITY_COLORS[e.severity] ?? "text-gray-300"
+                  e.message === "Application starting, database connected"
+                    ? "text-green-400"
+                    : SEVERITY_COLORS[e.severity] ?? "text-gray-300"
                 )}
               >
                 <span className="text-gray-500 shrink-0">
@@ -286,6 +354,13 @@ export default function Dashboard({ setError }) {
           )}
         </div>
       </div>
+
+      <JobDetailsModal
+        jobId={jobQueueIdForModal}
+        onClose={() => setJobQueueIdForModal(null)}
+        setError={setError}
+        toast={toast}
+      />
     </div>
   );
 }
