@@ -4,6 +4,7 @@ import os
 from database import db
 from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_WARNING
 import db_helpers
+from job_processor import broadcast_queue_update
 
 CANCEL_REASON = "Cancelled: previous run did not complete (cleanup on startup)"
 
@@ -33,6 +34,17 @@ async def run_startup_cleanup() -> None:
             SEVERITY_DEBUG,
             job_id=job_id,
         )
+
+    # 1b. Job queue: cancel jobs whose run_after is more than one minute in the past
+    missed_count = await db_helpers.cancel_missed_future_jobs(
+        "Job cancelled during startup because the run after time has been missed"
+    )
+    if missed_count > 0:
+        await log_event(
+            f"Startup cleanup: cancelled {missed_count} job(s) whose run after time had been missed",
+            SEVERITY_WARNING,
+        )
+        await broadcast_queue_update()
 
     # 2. Video: downloading / get_metadata_for_download → no_metadata
     video_rows = await db.fetch(

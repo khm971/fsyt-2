@@ -2,6 +2,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from database import db
+from log_helper import log_event, SEVERITY_WARNING
 from services.ytdlp_service import get_video_info
 
 
@@ -240,6 +241,25 @@ async def cancel_job_on_startup(job_id: int, reason: str) -> None:
         (reason or "")[:1024],
         job_id,
     )
+
+
+async def cancel_missed_future_jobs(reason: str) -> int:
+    """Cancel jobs with status='new' and run_after more than one minute in the past. Sets warning_flag and status_message. Returns count cancelled."""
+    rows = await db.fetch(
+        """SELECT job_queue_id, video_id, channel_id FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after < NOW() - INTERVAL '1 minute'"""
+    )
+    for r in rows:
+        job_id = r["job_queue_id"]
+        await cancel_job_on_startup(job_id, reason)
+        await log_event(
+            f"Job {job_id} cancelled: run after time had been missed",
+            SEVERITY_WARNING,
+            job_id=job_id,
+            video_id=r.get("video_id"),
+            channel_id=r.get("channel_id"),
+        )
+    return len(rows)
 
 
 async def add_job(job_type: str, video_id: int = None, channel_id: int = None, parameter: str = None, priority: int = 50):

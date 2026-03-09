@@ -133,7 +133,7 @@ export function formatScheduledRunAfter(isoString, now = new Date()) {
   });
 }
 
-/** Today: time only (e.g. "3:45 PM"). Previous days: date + time (e.g. "Mar 6 6:15 PM" or "Dec 3, 2024 6:15 PM"). */
+/** Today: time only with seconds (e.g. "3:45:32 PM"). Previous days: date + time with seconds (e.g. "Mar 6 6:15:00 PM" or "Dec 3, 2024 6:15:00 PM"). */
 export function formatSmartTime(isoString) {
   if (!isoString) return "—";
   const d = new Date(isoString);
@@ -143,14 +143,15 @@ export function formatSmartTime(isoString) {
     d.getDate() === now.getDate() &&
     d.getMonth() === now.getMonth() &&
     d.getFullYear() === now.getFullYear();
+  const timeOpts = { hour: "numeric", minute: "2-digit", second: "2-digit" };
   if (isToday) {
-    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return d.toLocaleTimeString(undefined, timeOpts);
   }
   const datePart = d.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
   });
-  const timePart = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const timePart = d.toLocaleTimeString(undefined, timeOpts);
   return `${datePart} ${timePart}`;
 }

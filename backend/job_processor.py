@@ -26,14 +26,37 @@ async def _check_chargeable_and_lockout(error_code: str, message: str) -> None:
 
 async def run_job_loop() -> None:
     job_id = None
+    was_paused = False
+    was_lockout = False
     while True:
         try:
             await asyncio.sleep(10)
             job_id = None
-            if await db_helpers.get_control_bool("queue_paused"):
+            queue_paused = await db_helpers.get_control_bool("queue_paused")
+            if queue_paused:
+                was_paused = True
                 continue
-            if await db_helpers.get_control_bool("chargeable_errors_lockout"):
+            chargeable_errors_lockout = await db_helpers.get_control_bool("chargeable_errors_lockout")
+            if chargeable_errors_lockout:
+                was_lockout = True
                 continue
+            # Just resumed from pause and/or lockout: cancel any missed future jobs before processing
+            if was_paused or was_lockout:
+                if was_paused and was_lockout:
+                    reason = "Job cancelled during queue resume from pause and Lockout because the run after time has been missed"
+                elif was_paused:
+                    reason = "Job cancelled during queue resume from pause because the run after time has been missed"
+                else:
+                    reason = "Job cancelled during queue resume from Lockout because the run after time has been missed"
+                missed_count = await db_helpers.cancel_missed_future_jobs(reason)
+                if missed_count > 0:
+                    await log_event(
+                        f"Queue resume: cancelled {missed_count} job(s) whose run after time had been missed",
+                        SEVERITY_WARNING,
+                    )
+                    await broadcast_queue_update()
+                was_paused = False
+                was_lockout = False
             heartbeat_value = datetime.now().isoformat()
             await db.execute(
                 "UPDATE control SET value = $1, last_update = NOW() WHERE key = 'server_heartbeat'",

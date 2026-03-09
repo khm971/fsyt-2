@@ -116,9 +116,9 @@ def download_video_sync(
             return False, "No file after download"
         temp_file_path = os.path.join(temp_dir, temp_files[0])
         final_file_path = os.path.join(info["fsyt_final_path"], temp_files[0])
-        _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: moving file started (temp to final)", sync_db.SEVERITY_INFO)
+        _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: moving file started (temp to final)", sync_db.SEVERITY_DEBUG)
         shutil.move(temp_file_path, final_file_path)
-        _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: move finished", sync_db.SEVERITY_INFO)
+        _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: move finished", sync_db.SEVERITY_DEBUG)
         # Log path from container's perspective (absolute path)
         print(f"[Download] video_id={video_id}: saved to {os.path.abspath(final_file_path)}", flush=True)
         thumb_url = info.get("thumbnail")

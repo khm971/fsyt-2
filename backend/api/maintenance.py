@@ -54,11 +54,12 @@ async def cancel_pending_future_jobs_preview():
 
 @router.post("/cancel-pending-future-jobs")
 async def cancel_pending_future_jobs():
-    """Set status to 'cancelled' for all jobs with status='new' and run_after > NOW().
+    """Set status to 'cancelled' and status_message for all jobs with status='new' and run_after > NOW().
     Does not set warning_flag since the user initiated this action."""
     try:
         result = await db.execute(
-            """UPDATE job_queue SET status = 'cancelled', last_update = NOW()
+            """UPDATE job_queue SET status = 'cancelled', last_update = NOW(),
+                   status_message = 'Future job cancelled in bulk by an admin.'
                WHERE status = 'new' AND run_after > NOW()"""
         )
         cancelled_count = int(result.split()[-1]) if result else 0
