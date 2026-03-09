@@ -30,24 +30,30 @@ def row_to_job(r) -> JobQueueResponse:
         acknowledge_flag=r["acknowledge_flag"] or False,
         run_after=r["run_after"],
         priority=r["priority"],
+        scheduler_entry_id=r.get("scheduler_entry_id"),
     )
 
 
 @router.get("", response_model=list[JobQueueResponse])
 async def list_jobs(
     status: str | None = Query(None),
+    scheduler_entry_id: int | None = Query(None),
     limit: int = Query(100, le=500),
 ):
     q = """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority
+                  run_after, priority, scheduler_entry_id
            FROM job_queue WHERE 1=1"""
     params = []
     i = 1
     if status:
         q += f" AND status = ${i}"
         params.append(status)
+        i += 1
+    if scheduler_entry_id is not None:
+        q += f" AND scheduler_entry_id = ${i}"
+        params.append(scheduler_entry_id)
         i += 1
     q += f" ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT ${i}"
     params.append(limit)
@@ -61,7 +67,7 @@ async def get_job(job_id: int):
         """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority
+                  run_after, priority, scheduler_entry_id
            FROM job_queue WHERE job_queue_id = $1""",
         job_id,
     )
@@ -75,12 +81,12 @@ async def create_job(body: JobQueueCreate):
     row = await db.fetchrow(
         """INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-            status, run_after, priority
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8)
+            status, run_after, priority, scheduler_entry_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8, $9)
         RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority""",
+                  run_after, priority, scheduler_entry_id""",
         body.job_type,
         body.video_id,
         body.channel_id,
@@ -89,6 +95,7 @@ async def create_job(body: JobQueueCreate):
         body.extended_parameters,
         body.run_after,
         body.priority,
+        body.scheduler_entry_id,
     )
     await broadcast_queue_update()
     j = row_to_job(row)
@@ -103,7 +110,7 @@ async def acknowledge_job(job_id: int):
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority""",
+                     run_after, priority, scheduler_entry_id""",
         job_id,
     )
     if not r:
@@ -118,6 +125,28 @@ async def acknowledge_job(job_id: int):
     return row_to_job(r)
 
 
+@router.patch("/{job_id}/unacknowledge", response_model=JobQueueResponse)
+async def unacknowledge_job(job_id: int):
+    r = await db.fetchrow(
+        """UPDATE job_queue SET acknowledge_flag = FALSE WHERE job_queue_id = $1
+           RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                     parameter, extended_parameters, status, status_percent_complete, status_message,
+                     last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                     run_after, priority, scheduler_entry_id""",
+        job_id,
+    )
+    if not r:
+        raise HTTPException(404, "Job not found")
+    await broadcast_queue_update()
+    vid, cid = r.get("video_id"), r.get("channel_id")
+    extra = [f"video_id={vid}"] if vid is not None else []
+    if cid is not None:
+        extra.append(f"channel_id={cid}")
+    suffix = " (" + ", ".join(extra) + ")" if extra else ""
+    await log_event(f"Job {job_id} unacknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+    return row_to_job(r)
+
+
 @router.post("/{job_id}/cancel", response_model=JobQueueResponse)
 async def cancel_job(job_id: int):
     r = await db.fetchrow(
@@ -125,7 +154,7 @@ async def cancel_job(job_id: int):
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority""",
+                     run_after, priority, scheduler_entry_id""",
         job_id,
     )
     if not r:

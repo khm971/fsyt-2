@@ -1,6 +1,7 @@
 """Background job queue processor: dispatches to real job handlers."""
 import asyncio
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 
 from database import db
 from websocket_manager import ws_manager
@@ -181,6 +182,11 @@ async def run_job_loop() -> None:
                     else:
                         success, message, is_warning = False, "transcode_video_for_ipad not implemented (Phase 3)", True
 
+                elif job_type == "queue_all_downloads":
+                    count = await _run_queue_all_downloads(job_id=job_id)
+                    success = True
+                    message = f"Queued {count} download_video jobs"
+
                 else:
                     success, message, is_error = False, f"Unknown job type: {job_type}", True
             except Exception as e:
@@ -287,6 +293,42 @@ async def _run_fill_missing_metadata(max_videos: int, job_id: int | None = None)
         sleep_s = await db_helpers.get_control_int("sleep_fill_missing_meta", 5)
         if sleep_s > 0:
             await asyncio.sleep(sleep_s)
+
+
+async def _run_queue_all_downloads(job_id: int | None = None) -> int:
+    """Queue download_video jobs for all videos missing metadata. Returns count of jobs queued."""
+    min_delay = await db_helpers.get_control_int("download_scheduler_min_delay", 60)
+    max_delay = await db_helpers.get_control_int("download_scheduler_max_delay", 300)
+    priority = await db_helpers.get_control_int("download_scheduler_job_pri", 50)
+    videos = await db_helpers.get_videos_missing_metadata(limit=None)
+    await log_event(
+        f"Job {job_id or '?'}: starting queue_all_downloads (videos={len(videos)}, min_delay={min_delay}, max_delay={max_delay}, priority={priority})",
+        SEVERITY_INFO,
+        job_id=job_id,
+    )
+    furthest = await db_helpers.get_furthest_scheduled_job()
+    furthest_time = furthest["run_after"] if furthest and furthest.get("run_after") else None
+    now = datetime.now()
+    if furthest_time is not None and furthest_time < now:
+        furthest_time = now
+    if furthest_time:
+        delay = random.randint(min_delay, max_delay)
+        next_scheduled = furthest_time + timedelta(seconds=delay)
+    else:
+        next_scheduled = now
+    for v in videos:
+        await db_helpers.add_video_job_to_queue(
+            "download_video", v["video_id"], run_after=next_scheduled, priority=priority
+        )
+        delay = random.randint(min_delay, max_delay)
+        next_scheduled = next_scheduled + timedelta(seconds=delay)
+    await broadcast_queue_update()
+    await log_event(
+        f"Job {job_id or '?'}: queued {len(videos)} download_video jobs",
+        SEVERITY_INFO,
+        job_id=job_id,
+    )
+    return len(videos)
 
 
 async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: int | None = None) -> str | None:
@@ -409,7 +451,7 @@ async def broadcast_queue_update() -> None:
         """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority
+                  run_after, priority, scheduler_entry_id
            FROM job_queue ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT 100"""
     )
     jobs = [
@@ -428,6 +470,8 @@ async def broadcast_queue_update() -> None:
             "error_flag": r["error_flag"],
             "acknowledge_flag": r["acknowledge_flag"],
             "priority": r["priority"],
+            "run_after": r["run_after"].isoformat() if r.get("run_after") else None,
+            "scheduler_entry_id": r.get("scheduler_entry_id"),
         }
         for r in rows
     ]

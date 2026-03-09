@@ -26,6 +26,9 @@ from api.charged_errors import router as charged_errors_router
 from api.log import router as log_router
 from api.maintenance import router as maintenance_router
 from api.status import router as status_router
+from api.scheduler import router as scheduler_router
+from scheduler_service import start_scheduler, shutdown_scheduler
+from startup_cleanup import run_startup_cleanup
 
 
 async def _drain_video_progress_loop():
@@ -76,15 +79,19 @@ async def lifespan(app: FastAPI):
         )
         raise
     await log_event("Migrations complete", SEVERITY_INFO)
+    await run_startup_cleanup()
     await log_event("Starting job loop", SEVERITY_DEBUG)
     task = asyncio.create_task(run_job_loop())
     await log_event("Starting video progress drain loop", SEVERITY_DEBUG)
     progress_task = asyncio.create_task(_drain_video_progress_loop())
     transcode_task = asyncio.create_task(_transcode_progress_broadcast_loop())
+    await log_event("Starting scheduler", SEVERITY_DEBUG)
+    await start_scheduler()
     await log_event("System startup complete", SEVERITY_NOTICE)
     try:
         yield
     finally:
+        shutdown_scheduler()
         task.cancel()
         progress_task.cancel()
         transcode_task.cancel()
@@ -121,6 +128,7 @@ app.include_router(charged_errors_router, prefix="/api")
 app.include_router(log_router, prefix="/api")
 app.include_router(maintenance_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
+app.include_router(scheduler_router, prefix="/api")
 
 
 @app.get("/health")

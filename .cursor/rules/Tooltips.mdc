@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Tooltips use the shared Tooltip component in frontend/src/components/Tooltip.jsx. The trigger is wrapped in a relative group/tooltip inline-flex span; the tooltip is absolute with side-based classes: top (default) uses bottom-full left-1/2 -translate-x-1/2 mb-2, and bottom/left/right use the matching top/left/right variants with mt-2/mr-2/ml-2 so there’s an ~8px gap and they’re not under the cursor. Styling is px-3 py-1.5 rounded-md bg-gray-800 text-gray-100 text-xs whitespace-nowrap border border-gray-700 shadow-lg, shown on hover via opacity-0 invisible and group-hover/tooltip:opacity-100 group-hover/tooltip:visible with transition-opacity duration-150, plus pointer-events-none and z-50. Use this component and the same positioning/styling pattern for new tooltips; pass side="top"|"bottom"|"left"|"right" when the default top isn’t appropriate.

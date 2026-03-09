@@ -94,6 +94,45 @@ export function formatRelativeTime(isoString, now = new Date()) {
   return `(${diffDay} day${diffDay === 1 ? "" : "s"} ago)`;
 }
 
+/**
+ * Friendly format for a scheduled run_after time: "in 20 minutes", "Tomorrow at 2:15 PM",
+ * "Today at 2:15 PM", or "Should have run already" if in the past.
+ * @param {string} isoString - ISO date string (run_after)
+ * @param {Date} [now] - Reference time (default: new Date())
+ */
+export function formatScheduledRunAfter(isoString, now = new Date()) {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
+  const diffMs = d.getTime() - now.getTime();
+  if (diffMs <= 0) return "Should have run already";
+  const diffMin = Math.round(diffMs / 60000);
+  const diffHr = Math.floor(diffMin / 60);
+  const sameDay =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow =
+    d.getDate() === tomorrow.getDate() &&
+    d.getMonth() === tomorrow.getMonth() &&
+    d.getFullYear() === tomorrow.getFullYear();
+  if (diffMin < 60) return diffMin <= 1 ? "in 1 minute" : `in ${diffMin} minutes`;
+  if (diffHr < 24 && sameDay)
+    return `Today at ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  if (diffHr < 48 && isTomorrow)
+    return `Tomorrow at ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+  if (diffHr < 24) return `in ${diffHr} hour${diffHr === 1 ? "" : "s"}`;
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 /** Today: time only (e.g. "3:45 PM"). Previous days: date + time (e.g. "Mar 6 6:15 PM" or "Dec 3, 2024 6:15 PM"). */
 export function formatSmartTime(isoString) {
   if (!isoString) return "—";

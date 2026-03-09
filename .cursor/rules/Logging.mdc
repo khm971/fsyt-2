@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Ensure that all important events are logged using the existing logging system in the application.

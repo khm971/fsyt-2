@@ -1,8 +1,9 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { SlidersHorizontal, Wrench } from "lucide-react";
+import { SlidersHorizontal, Wrench, CalendarClock } from "lucide-react";
 import { cn } from "../lib/utils";
 import ControlValuesPanel from "../components/ControlValuesPanel";
 import Maintenance from "./Maintenance";
+import JobScheduler from "./JobScheduler";
 
 function AdminNavLink({ to, icon: Icon, children }) {
   return (
@@ -46,6 +47,9 @@ export default function Admin({ setError }) {
             <AdminNavLink to="/admin/maintenance" icon={Wrench}>
               Maintenance
             </AdminNavLink>
+            <AdminNavLink to="/admin/job-scheduler" icon={CalendarClock}>
+              Job Scheduler
+            </AdminNavLink>
           </nav>
         </aside>
 
@@ -54,6 +58,7 @@ export default function Admin({ setError }) {
             <Route index element={<Navigate to="control-values" replace />} />
             <Route path="control-values" element={<ControlValuesPanel setError={setError} />} />
             <Route path="maintenance" element={<Maintenance setError={setError} />} />
+            <Route path="job-scheduler" element={<JobScheduler setError={setError} />} />
           </Routes>
         </section>
       </div>

@@ -80,6 +80,7 @@ export const api = {
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.status) q.set("status", params.status);
+      if (params.scheduler_entry_id != null) q.set("scheduler_entry_id", params.scheduler_entry_id);
       if (params.limit != null) q.set("limit", params.limit);
       const query = q.toString();
       return apiFetch(`/queue${query ? `?${query}` : ""}`);
@@ -87,6 +88,7 @@ export const api = {
     get: (id) => apiFetch(`/queue/${id}`),
     create: (body) => apiFetch("/queue", { method: "POST", body: JSON.stringify(body) }),
     acknowledge: (id) => apiFetch(`/queue/${id}/acknowledge`, { method: "PATCH" }),
+    unacknowledge: (id) => apiFetch(`/queue/${id}/unacknowledge`, { method: "PATCH" }),
     cancel: (id) => apiFetch(`/queue/${id}/cancel`, { method: "POST" }),
   },
 
@@ -98,6 +100,14 @@ export const api = {
 
   status: {
     get: () => apiFetch("/status"),
+  },
+
+  scheduler: {
+    list: () => apiFetch("/scheduler"),
+    get: (id) => apiFetch(`/scheduler/${id}`),
+    create: (body) => apiFetch("/scheduler", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => apiFetch(`/scheduler/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    delete: (id) => apiFetch(`/scheduler/${id}`, { method: "DELETE" }),
   },
 
   maintenance: {

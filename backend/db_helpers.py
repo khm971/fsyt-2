@@ -138,14 +138,14 @@ async def add_video_if_not_exist(channel_id: int, provider_key: str, title: str,
     return True, row["video_id"]
 
 
-async def get_videos_missing_metadata(limit: int = 100):
-    return await db.fetch(
-        """SELECT video_id, provider_key FROM video
-           WHERE status IN ('no_metadata', 'initial_metadata_load', 'llm_processing')
-           AND (is_ignore IS NOT TRUE) AND (status NOT LIKE 'error%')
-           ORDER BY video_id LIMIT $1""",
-        limit,
-    )
+async def get_videos_missing_metadata(limit: int | None = 100):
+    base = """SELECT video_id, provider_key FROM video
+              WHERE status IN ('no_metadata', 'initial_metadata_load', 'llm_processing')
+              AND (is_ignore IS NOT TRUE) AND (status NOT LIKE 'error%')
+              ORDER BY video_id"""
+    if limit is not None:
+        return await db.fetch(base + " LIMIT $1", limit)
+    return await db.fetch(base)
 
 
 async def get_auto_downloadenabled_channels():
@@ -232,6 +232,16 @@ async def mark_job_done_exception(job_id: int, message: str, is_warning: bool = 
     )
 
 
+async def cancel_job_on_startup(job_id: int, reason: str) -> None:
+    """Set job to cancelled with message and warning flag (for startup cleanup of in-progress jobs)."""
+    await db.execute(
+        """UPDATE job_queue SET status = 'cancelled', last_update = NOW(), status_message = $1, warning_flag = TRUE
+           WHERE job_queue_id = $2""",
+        (reason or "")[:1024],
+        job_id,
+    )
+
+
 async def add_job(job_type: str, video_id: int = None, channel_id: int = None, parameter: str = None, priority: int = 50):
     await db.execute(
         """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority) VALUES ($1, $2, $3, $4, 'new', $5)""",
@@ -239,5 +249,25 @@ async def add_job(job_type: str, video_id: int = None, channel_id: int = None, p
         video_id,
         channel_id,
         parameter,
+        priority,
+    )
+
+
+async def get_furthest_scheduled_job():
+    """Return the job_queue row with status='new' and the latest run_after, or None."""
+    return await db.fetchrow(
+        """SELECT job_queue_id, run_after FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL
+           ORDER BY run_after DESC LIMIT 1"""
+    )
+
+
+async def add_video_job_to_queue(job_type: str, video_id: int, run_after=None, priority: int = 50):
+    await db.execute(
+        """INSERT INTO job_queue (job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
+           status, run_after, priority) VALUES ($1, $2, NULL, NULL, NULL, NULL, 'new', $3, $4)""",
+        job_type,
+        video_id,
+        run_after,
         priority,
     )

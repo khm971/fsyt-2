@@ -91,6 +91,7 @@ class JobQueueCreate(BaseModel):
     extended_parameters: Optional[str] = None
     run_after: Optional[datetime] = None
     priority: int = 50
+    scheduler_entry_id: Optional[int] = None
 
 
 class JobQueueResponse(BaseModel):
@@ -112,6 +113,49 @@ class JobQueueResponse(BaseModel):
     acknowledge_flag: bool = False
     run_after: Optional[datetime] = None
     priority: Optional[int] = None
+    scheduler_entry_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ----- Scheduler entry -----
+class SchedulerEntryBase(BaseModel):
+    name: str
+    job_type: str
+    cron_expression: str
+    video_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    other_target_id: Optional[int] = None
+    parameter: Optional[str] = None
+    extended_parameters: Optional[str] = None
+    priority: int = 50
+    is_enabled: bool = True
+
+
+class SchedulerEntryCreate(SchedulerEntryBase):
+    pass
+
+
+class SchedulerEntryUpdate(BaseModel):
+    name: Optional[str] = None
+    job_type: Optional[str] = None
+    cron_expression: Optional[str] = None
+    video_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    other_target_id: Optional[int] = None
+    parameter: Optional[str] = None
+    extended_parameters: Optional[str] = None
+    priority: Optional[int] = None
+    is_enabled: Optional[bool] = None
+
+
+class SchedulerEntryResponse(SchedulerEntryBase):
+    scheduler_entry_id: int
+    last_run_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    record_created: Optional[datetime] = None
+    record_updated: Optional[datetime] = None
 
     class Config:
         from_attributes = True

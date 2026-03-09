@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Whenever creating or modifying something that requires dynamic updating, which is most items in this application, try to avoid doing any polling (AKA Rest calls), but rather try to use the existing websockets.

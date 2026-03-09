@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
-import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime } from "../lib/utils";
-import { Activity, Film, ScrollText, Users } from "lucide-react";
+import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter } from "../lib/utils";
+import { Activity, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, CalendarClock } from "lucide-react";
 
 const SEVERITY_COLORS = {
   5: "text-gray-500",
@@ -35,7 +35,7 @@ export default function Dashboard({ setError }) {
       try {
         const [list, recent, status] = await Promise.all([
           api.control.list(),
-          api.log.recent({ limit: 10, min_severity: 20 }),
+          api.log.recent({ limit: 20, min_severity: 20 }),
           api.status.get(),
         ]);
         if (cancelled) return;
@@ -77,6 +77,18 @@ export default function Dashboard({ setError }) {
   const running = jobs.filter((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "new");
   const errors = jobs.filter((j) => j.error_flag);
+  const futureScheduled = jobs.filter(
+    (j) => j.run_after != null && new Date(j.run_after) > now
+  );
+  const jobsWithRunAfter = jobs.filter((j) => j.run_after != null);
+  const lastScheduledRunAfter =
+    jobsWithRunAfter.length > 0
+      ? Math.max(...jobsWithRunAfter.map((j) => new Date(j.run_after).getTime()))
+      : null;
+  const nextScheduledRunAfter =
+    futureScheduled.length > 0
+      ? Math.min(...futureScheduled.map((j) => new Date(j.run_after).getTime()))
+      : null;
 
   if (loading) {
     return (
@@ -130,11 +142,47 @@ export default function Dashboard({ setError }) {
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="text-gray-400 text-sm mb-1">Jobs</div>
-          <div className="text-white">
-            {running.length} running, {queued.length} queued
+          <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
+            <ListTodo className="w-4 h-4" />
+            Jobs
+          </div>
+          <div className="text-white text-sm space-y-1.5">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="flex items-center gap-1.5">
+                <PlayCircle className="w-3.5 h-3.5 text-green-400" />
+                {running.length} running
+              </span>
+              <span className="flex items-center gap-1.5 text-gray-300">
+                <Clock className="w-3.5 h-3.5" />
+                {queued.length} queued
+              </span>
+            </div>
             {errors.length > 0 && (
-              <span className="text-red-400 ml-1">({errors.length} errors)</span>
+              <div className="flex items-center gap-1.5 text-red-400">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                {errors.length} error{errors.length !== 1 ? "s" : ""}
+              </div>
+            )}
+            {futureScheduled.length > 0 && nextScheduledRunAfter != null && (
+              <div className="flex items-center gap-1.5 text-gray-300 pt-0.5">
+                <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                <span>
+                  Next scheduled: {formatScheduledRunAfter(new Date(nextScheduledRunAfter).toISOString(), now)}
+                  {futureScheduled.length > 1 && (
+                    <span className="text-gray-500 ml-1">
+                      ({futureScheduled.length} total)
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+            {futureScheduled.length > 0 && lastScheduledRunAfter != null && (
+              <div className="flex items-center gap-1.5 text-gray-300 pt-0.5">
+                <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                <span>
+                  Last scheduled: {formatScheduledRunAfter(new Date(lastScheduledRunAfter).toISOString(), now)}
+                </span>
+              </div>
             )}
           </div>
         </div>
@@ -212,6 +260,7 @@ export default function Dashboard({ setError }) {
             logEntries.map((e) => (
               <div
                 key={e.event_log_id}
+                title={`Severity: ${e.severity}, Job ID: ${e.job_id ?? "—"}, Video ID: ${e.video_id ?? "—"}, Channel ID: ${e.channel_id ?? "—"}`}
                 className={cn(
                   "flex gap-2 truncate items-center",
                   SEVERITY_COLORS[e.severity] ?? "text-gray-300"
