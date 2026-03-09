@@ -130,6 +130,8 @@ export const api = {
       return apiFetch(`/charged_errors${query ? `?${query}` : ""}`);
     },
     dismiss: (id) => apiFetch(`/charged_errors/${id}/dismiss`, { method: "POST" }),
+    undismiss: (id) => apiFetch(`/charged_errors/${id}/undismiss`, { method: "POST" }),
+    dismissAll: () => apiFetch("/charged_errors/dismiss-all", { method: "POST" }),
   },
 
   log: {

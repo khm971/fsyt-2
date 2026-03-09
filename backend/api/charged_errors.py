@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import db
 from api.schemas import ChargedErrorResponse
+from log_helper import log_event, SEVERITY_INFO
 
 router = APIRouter(prefix="/charged_errors", tags=["charged_errors"])
 
@@ -20,7 +21,7 @@ async def list_charged_errors(
         q += f" AND is_dismissed = ${i}"
         params.append(dismissed)
         i += 1
-    q += f" ORDER BY error_date DESC LIMIT ${i}"
+    q += f" ORDER BY charged_error_id LIMIT ${i}"
     params.append(limit)
     rows = await db.fetch(q, *params)
     return [
@@ -35,10 +36,42 @@ async def list_charged_errors(
     ]
 
 
+@router.post("/dismiss-all")
+async def dismiss_all_charged_errors():
+    r = await db.fetchrow(
+        """WITH updated AS (
+             UPDATE charged_error SET is_dismissed = TRUE WHERE is_dismissed = FALSE
+             RETURNING charged_error_id
+           )
+           SELECT COUNT(*) AS dismissed_count FROM updated"""
+    )
+    count = int(r["dismissed_count"]) if r.get("dismissed_count") is not None else 0
+    await log_event("Charged errors: dismiss all", SEVERITY_INFO)
+    return {"dismissed_count": count}
+
+
 @router.post("/{charged_error_id}/dismiss", response_model=ChargedErrorResponse)
 async def dismiss_charged_error(charged_error_id: int):
     r = await db.fetchrow(
         """UPDATE charged_error SET is_dismissed = TRUE WHERE charged_error_id = $1
+           RETURNING charged_error_id, error_date, error_code, message, is_dismissed""",
+        charged_error_id,
+    )
+    if not r:
+        raise HTTPException(404, "Charged error not found")
+    return ChargedErrorResponse(
+        charged_error_id=r["charged_error_id"],
+        error_date=r["error_date"],
+        error_code=r["error_code"],
+        message=r["message"],
+        is_dismissed=r["is_dismissed"],
+    )
+
+
+@router.post("/{charged_error_id}/undismiss", response_model=ChargedErrorResponse)
+async def undismiss_charged_error(charged_error_id: int):
+    r = await db.fetchrow(
+        """UPDATE charged_error SET is_dismissed = FALSE WHERE charged_error_id = $1
            RETURNING charged_error_id, error_date, error_code, message, is_dismissed""",
         charged_error_id,
     )
