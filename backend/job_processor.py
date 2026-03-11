@@ -486,6 +486,26 @@ async def broadcast_transcode_status_changed() -> None:
 async def broadcast_queue_update() -> None:
     total_row = await db.fetchrow("SELECT COUNT(*) AS total FROM job_queue")
     total_count = int(total_row["total"] or 0)
+    multi_row = await db.fetchrow(
+        """SELECT COUNT(*) AS n FROM backend_instances
+           WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
+    )
+    multiple_instances = int(multi_row["n"] or 0) > 1
+    backend_instances_list = []
+    if multiple_instances:
+        instances_rows = await db.fetch(
+            """SELECT instance_id, hostname, last_heartbeat_utc FROM backend_instances
+               WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+               ORDER BY last_heartbeat_utc DESC"""
+        )
+        backend_instances_list = [
+            {
+                "instance_id": str(r["instance_id"]),
+                "hostname": r["hostname"] or "",
+                "last_heartbeat_utc": r["last_heartbeat_utc"].isoformat() if r["last_heartbeat_utc"] else None,
+            }
+            for r in instances_rows
+        ]
     rows = await db.fetch(
         """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
@@ -515,9 +535,15 @@ async def broadcast_queue_update() -> None:
         for r in rows
     ]
     heartbeat = await db_helpers.get_control_value("server_heartbeat")
-    await ws_manager.broadcast({
+    queue_paused = await db_helpers.get_control_bool("queue_paused")
+    payload = {
         "type": "queue_update",
         "jobs": jobs,
         "total_count": total_count,
         "heartbeat": heartbeat,
-    })
+        "multiple_instances": multiple_instances,
+        "queue_paused": queue_paused,
+    }
+    if backend_instances_list:
+        payload["backend_instances"] = backend_instances_list
+    await ws_manager.broadcast(payload)

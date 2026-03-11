@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
 import { formatDateTime } from "../lib/utils";
-import { CalendarClock, Pencil, Trash2, History, Search } from "lucide-react";
+import { CalendarClock, Pencil, Trash2, History, Search, AlertTriangle } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import Modal from "../components/Modal";
 import { Tooltip } from "../components/Tooltip";
@@ -66,6 +66,8 @@ export default function JobScheduler({ setError }) {
   const [historyJobs, setHistoryJobs] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const [confirmDeleteEntry, setConfirmDeleteEntry] = useState(null);
+  const [deleteEntryLoading, setDeleteEntryLoading] = useState(false);
   const [channels, setChannels] = useState([]);
   const [videos, setVideos] = useState([]);
 
@@ -159,15 +161,23 @@ export default function JobScheduler({ setError }) {
     }
   };
 
-  const deleteEntry = async (entry) => {
-    if (!confirm(`Delete schedule "${entry.name}"?`)) return;
+  const deleteEntry = (entry) => {
+    setConfirmDeleteEntry(entry);
+  };
+
+  const performDeleteEntry = async () => {
+    if (!confirmDeleteEntry) return;
+    setDeleteEntryLoading(true);
     try {
-      await api.scheduler.delete(entry.scheduler_entry_id);
+      await api.scheduler.delete(confirmDeleteEntry.scheduler_entry_id);
       toast.addToast("Schedule deleted", "success");
       loadEntries();
+      setConfirmDeleteEntry(null);
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
+    } finally {
+      setDeleteEntryLoading(false);
     }
   };
 
@@ -238,7 +248,7 @@ export default function JobScheduler({ setError }) {
                       <Tooltip title="Delete" side="top">
                         <button
                           type="button"
-                          onClick={() => deleteEntry(e)}
+                          onClick={() => setConfirmDeleteEntry(e)}
                           className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -255,6 +265,39 @@ export default function JobScheduler({ setError }) {
           </div>
         )}
       </div>
+
+      {confirmDeleteEntry && (
+        <Modal title="Delete schedule" onClose={() => !deleteEntryLoading && setConfirmDeleteEntry(null)}>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border border-red-900/60 bg-red-950/30 p-4">
+              <div className="rounded-full bg-red-900/50 p-2 text-red-300">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium text-white">
+                Are you sure you want to delete schedule &quot;{confirmDeleteEntry.name}&quot;?
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteEntry(null)}
+                disabled={deleteEntryLoading}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={performDeleteEntry}
+                disabled={deleteEntryLoading}
+                className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+              >
+                {deleteEntryLoading ? "Deleting…" : "Yes, delete schedule"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {showForm && (
         <Modal title={editingId != null ? "Edit schedule" : "Create schedule"} onClose={() => !saving && setShowForm(false)} maxWidthClass="max-w-lg">

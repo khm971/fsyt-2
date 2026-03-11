@@ -3,13 +3,21 @@ import { api } from "../api/client";
 import { cn, formatDurationSeconds } from "../lib/utils";
 import { Play, Film } from "lucide-react";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
+import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
 import VideoPlayer from "../components/VideoPlayer";
+import { VideoDetailsModal } from "../components/VideoDetailsModal";
+import { ChannelEditModal } from "../components/ChannelEditModal";
+import { JobDetailsModal } from "../components/JobDetailsModal";
 
 export default function Watch({ setError }) {
+  const toast = useToast();
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [playingVideo, setPlayingVideo] = useState(null);
+  const [videoIdForDetails, setVideoIdForDetails] = useState(null);
+  const [editingChannelId, setEditingChannelId] = useState(null);
+  const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const { videoUpdatedAt } = useQueueWebSocket();
 
   const loadVideos = useCallback(async () => {
@@ -54,7 +62,15 @@ export default function Watch({ setError }) {
                 <td className="px-4 py-2 font-mono text-gray-300">{v.video_id}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-white">{v.title || v.provider_key || "—"}</span>
+                    <Tooltip title="Video details" side="top" wrap>
+                      <button
+                        type="button"
+                        onClick={() => setVideoIdForDetails(v.video_id)}
+                        className="text-white hover:text-blue-400 text-left"
+                      >
+                        {v.title || v.provider_key || "—"}
+                      </button>
+                    </Tooltip>
                     {v.transcode_path && (
                       <Tooltip title="Transcode Exists">
                         <span className="inline-flex text-gray-400 shrink-0">
@@ -112,6 +128,28 @@ export default function Watch({ setError }) {
           }}
         />
       )}
+      <VideoDetailsModal
+        videoId={videoIdForDetails}
+        onClose={() => setVideoIdForDetails(null)}
+        setError={setError}
+        toast={toast}
+        onVideoUpdated={loadVideos}
+        onOpenJobDetails={(jobId) => setJobQueueIdForModal(jobId)}
+        onOpenChannelEdit={(channelId) => setEditingChannelId(channelId)}
+      />
+      <ChannelEditModal
+        channelId={editingChannelId}
+        onClose={() => setEditingChannelId(null)}
+        onSaved={loadVideos}
+        setError={setError}
+      />
+      <JobDetailsModal
+        jobId={jobQueueIdForModal}
+        onClose={() => setJobQueueIdForModal(null)}
+        setError={setError}
+        toast={toast}
+        onJobCanceled={loadVideos}
+      />
     </div>
   );
 }

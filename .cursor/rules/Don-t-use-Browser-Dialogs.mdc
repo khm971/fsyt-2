@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Never use the browser dialog box for confirmation or anything else.  Rather, create your own modals and style them similarly to other confirmation (etc) modals in the project.

@@ -17,7 +17,7 @@ export function Tooltip({ children, title, side = "top", wrap = false }) {
     <span className="relative group/tooltip inline-flex">
       {children}
       <span
-        className={`absolute ${sideClasses[side]} px-3 py-1.5 rounded-md bg-gray-800 text-gray-100 text-xs opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-opacity duration-150 pointer-events-none z-50 border border-gray-700 shadow-lg ${wrap ? "whitespace-normal max-w-[180px] text-left" : "whitespace-nowrap"}`}
+        className={`absolute ${sideClasses[side]} px-3 py-1.5 rounded-md bg-gray-800 text-gray-100 text-xs opacity-0 invisible group-hover/tooltip:opacity-100 group-hover/tooltip:visible transition-opacity duration-150 pointer-events-none z-50 border border-gray-700 shadow-lg ${wrap ? "whitespace-pre-line max-w-[220px] text-left" : "whitespace-nowrap"}`}
       >
         {title}
       </span>

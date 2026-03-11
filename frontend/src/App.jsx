@@ -65,7 +65,7 @@ function Nav() {
 
 export default function App() {
   const [error, setError] = useState(null);
-  const { status, reconnectedAt } = useQueueWebSocket();
+  const { status, reconnectedAt, multipleInstances } = useQueueWebSocket();
   const connectionLost = status === "closed";
 
   useEffect(() => {
@@ -80,7 +80,7 @@ export default function App() {
   return (
     <ToastProvider>
     <BrowserRouter>
-      <div className="min-h-screen bg-gray-950 text-gray-200 flex flex-col">
+      <div className="min-h-screen bg-gray-950 text-gray-200 flex flex-col overflow-x-hidden">
         <header className="border-b border-gray-800 bg-gray-900/80 sticky top-0 z-10">
           <div className="flex items-center justify-between px-4 py-3">
             <h1 className="text-lg font-semibold text-white">FlagShip YouTube</h1>
@@ -100,8 +100,13 @@ export default function App() {
               )}
             </div>
           )}
+          {multipleInstances && (
+            <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm">
+              More than one backend is running. Please stop duplicate instances.
+            </div>
+          )}
         </header>
-        <main className="flex-1 p-4" key={reconnectedAt}>
+        <main className="flex-1 p-4 min-w-0" key={reconnectedAt}>
           <Routes>
             <Route path="/watch" element={<Watch setError={setError} />} />
             <Route path="/" element={<Dashboard setError={setError} />} />

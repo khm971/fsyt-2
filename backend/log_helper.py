@@ -1,6 +1,7 @@
 """Async helper to write important events to the event_log table."""
 from database import db
 from websocket_manager import ws_manager
+from backend_instance_context import get_backend_instance
 
 SEVERITY_LOW_LEVEL = 5
 SEVERITY_DEBUG = 10
@@ -20,14 +21,17 @@ async def log_event(
 ) -> None:
     """Write an event to the event_log table."""
     try:
+        instance_id, hostname = get_backend_instance()
         await db.execute(
-            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id)
-               VALUES ($1, $2, $3, $4, $5)""",
+            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
             (message or "")[:4096],
             severity,
             job_id,
             video_id,
             channel_id,
+            instance_id,
+            hostname or None,
         )
         if severity >= SEVERITY_INFO:
             try:

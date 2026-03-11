@@ -17,6 +17,9 @@ export function QueueWebSocketProvider({ children }) {
   const [videoProgressOverrides, setVideoProgressOverrides] = useState({});
   const [serverHeartbeat, setServerHeartbeat] = useState(null);
   const [reconnectedAt, setReconnectedAt] = useState(0);
+  const [multipleInstances, setMultipleInstances] = useState(false);
+  const [backendInstances, setBackendInstances] = useState([]);
+  const [queuePausedFromServer, setQueuePausedFromServer] = useState(undefined);
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const wasClosedRef = useRef(false);
@@ -58,6 +61,13 @@ export function QueueWebSocketProvider({ children }) {
           setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
+          if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
+          if (Array.isArray(msg.backend_instances)) setBackendInstances(msg.backend_instances);
+          if (msg.queue_paused !== undefined) setQueuePausedFromServer(Boolean(msg.queue_paused));
+        }
+        if (msg.type === "multi_instance_status" && msg.multiple_instances !== undefined) {
+          setMultipleInstances(Boolean(msg.multiple_instances));
+          if (Array.isArray(msg.instances)) setBackendInstances(msg.instances);
         }
         if (msg.type === "heartbeat" && msg.value != null) {
           setServerHeartbeat(msg.value);
@@ -114,6 +124,9 @@ export function QueueWebSocketProvider({ children }) {
     videoProgressOverrides,
     serverHeartbeat,
     reconnectedAt,
+    multipleInstances,
+    backendInstances,
+    queuePausedFromServer,
     send,
   };
 

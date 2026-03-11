@@ -3,8 +3,8 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
-import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter } from "../lib/utils";
-import { Activity, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock } from "lucide-react";
+import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter, formatDateTimeWithSeconds } from "../lib/utils";
+import { Activity, Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 
@@ -27,7 +27,7 @@ export default function Dashboard({ setError }) {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
-  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat } = useQueueWebSocket();
+  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer } = useQueueWebSocket();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -76,21 +76,36 @@ export default function Dashboard({ setError }) {
     }
   };
 
+  const handleSetQueuePaused = async (paused) => {
+    try {
+      const value = paused ? "true" : "false";
+      const r = await api.control.set("queue_paused", value);
+      setControl((prev) => ({ ...prev, [r.key]: { key: r.key, index: r.index, value: r.value, last_update: r.last_update } }));
+      toast.addToast(paused ? "Queue paused" : "Queue resumed", "success");
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+    }
+  };
+
   const heartbeat = serverHeartbeat ?? control.server_heartbeat?.value;
   const heartbeatAgeMs = heartbeat != null ? now.getTime() - new Date(heartbeat).getTime() : null;
   const heartbeatCurrent = heartbeatAgeMs != null && heartbeatAgeMs <= 30_000;
   const heartbeatStale = heartbeatAgeMs != null && heartbeatAgeMs > 30_000 && heartbeatAgeMs <= 5 * 60 * 1000;
   const heartbeatOld = heartbeatAgeMs != null && heartbeatAgeMs > 5 * 60 * 1000;
-  const queuePaused = control.queue_paused?.value === "true";
+  const queuePaused =
+    queuePausedFromServer !== undefined
+      ? queuePausedFromServer
+      : control.queue_paused?.value === "true";
   const chargeableErrorsLockout = control.chargeable_errors_lockout?.value === "true";
   const running = jobs.filter((j) => j.status === "running");
   const queued = jobs.filter((j) => j.status === "new");
   const errors = jobs.filter((j) => j.error_flag && !j.acknowledge_flag);
   const warnings = jobs.filter((j) => j.warning_flag && !j.acknowledge_flag);
   const futureScheduled = jobs.filter(
-    (j) => j.run_after != null && new Date(j.run_after) > now
+    (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
   );
-  const jobsWithRunAfter = jobs.filter((j) => j.run_after != null);
+  const jobsWithRunAfter = jobs.filter((j) => j.status === "new" && j.run_after != null);
   const lastScheduledRunAfter =
     jobsWithRunAfter.length > 0
       ? Math.max(...jobsWithRunAfter.map((j) => new Date(j.run_after).getTime()))
@@ -98,6 +113,14 @@ export default function Dashboard({ setError }) {
   const nextScheduledRunAfter =
     futureScheduled.length > 0
       ? Math.min(...futureScheduled.map((j) => new Date(j.run_after).getTime()))
+      : null;
+  const nextScheduledJob =
+    futureScheduled.length > 0 && nextScheduledRunAfter != null
+      ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfter)
+      : null;
+  const lastScheduledJob =
+    jobsWithRunAfter.length > 0 && lastScheduledRunAfter != null
+      ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfter)
       : null;
 
   if (loading) {
@@ -114,7 +137,7 @@ export default function Dashboard({ setError }) {
         <div className="bg-red-900/50 border border-red-600 rounded-lg px-4 py-3 flex items-center gap-3">
           <span className="text-red-400 font-semibold">Queue locked out</span>
           <span className="text-red-300 text-sm">
-            Too many chargeable errors. The job processor has stopped.
+            Too many charged errors. The job processor has stopped.
           </span>
         </div>
       )}
@@ -191,34 +214,60 @@ export default function Dashboard({ setError }) {
                 )}
               </div>
             )}
-            {futureScheduled.length > 0 && nextScheduledRunAfter != null && (
-              <div className="flex items-center gap-1.5 text-gray-300 pt-0.5">
+            {futureScheduled.length > 0 && nextScheduledRunAfter != null && nextScheduledJob && (
+              <div className="flex items-center gap-1.5 text-gray-300 pt-0.5 flex-wrap">
                 <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
-                <span>
-                  Next scheduled: {formatScheduledRunAfter(new Date(nextScheduledRunAfter).toISOString(), now)}
-                  {futureScheduled.length > 1 && (
-                    <span className="text-gray-500 ml-1">
-                      ({futureScheduled.length} total)
-                    </span>
-                  )}
-                </span>
+                <Tooltip
+                  title={`${formatDateTimeWithSeconds(nextScheduledJob.run_after)}\nJob ID: ${nextScheduledJob.job_queue_id}`}
+                  side="right"
+                  wrap
+                >
+                  <button
+                    type="button"
+                    onClick={() => setJobQueueIdForModal(nextScheduledJob.job_queue_id)}
+                    className="text-left text-cyan-400 hover:text-cyan-300"
+                  >
+                    Next scheduled: {formatScheduledRunAfter(new Date(nextScheduledRunAfter).toISOString(), now)}
+                  </button>
+                </Tooltip>
+                {futureScheduled.length > 1 && (
+                  <Link
+                    to="/queue?filter=scheduled"
+                    className="text-cyan-400 ml-1 hover:text-cyan-300"
+                  >
+                    ({futureScheduled.length} total)
+                  </Link>
+                )}
               </div>
             )}
-            {futureScheduled.length > 0 && lastScheduledRunAfter != null && (
+            {futureScheduled.length > 0 && lastScheduledRunAfter != null && lastScheduledJob && (
               <div className="flex items-center gap-1.5 text-gray-300 pt-0.5">
                 <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
-                <span>
-                  Last scheduled: {formatScheduledRunAfter(new Date(lastScheduledRunAfter).toISOString(), now)}
-                </span>
+                <Tooltip
+                  title={`${formatDateTimeWithSeconds(lastScheduledJob.run_after)}\nJob ID: ${lastScheduledJob.job_queue_id}`}
+                  side="right"
+                  wrap
+                >
+                  <button
+                    type="button"
+                    onClick={() => setJobQueueIdForModal(lastScheduledJob.job_queue_id)}
+                    className="text-left text-cyan-400 hover:text-cyan-300"
+                  >
+                    Last scheduled: {formatScheduledRunAfter(new Date(lastScheduledRunAfter).toISOString(), now)}
+                  </button>
+                </Tooltip>
               </div>
             )}
           </div>
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="text-gray-400 text-sm mb-2">Job Processor</div>
+          <div className="flex items-center gap-2 text-gray-400 text-sm mb-2">
+            <Cpu className="w-4 h-4" />
+            Job Processor
+          </div>
           <div className="text-white text-sm space-y-1.5">
-            <div>
+            <div className="flex items-center gap-2 flex-wrap">
               {chargeableErrorsLockout ? (
                 <span className="text-red-400 font-medium">Locked out</span>
               ) : queuePaused ? (
@@ -226,26 +275,69 @@ export default function Dashboard({ setError }) {
               ) : (
                 "Running"
               )}
-            </div>
-            <div className="font-mono text-gray-300">
-              {heartbeat ? (
+              {!chargeableErrorsLockout && (
                 <>
-                  {formatHeartbeatTime(heartbeat)}{" "}
-                  <span
-                    className={cn(
-                      "font-normal",
-                      heartbeatCurrent && "text-green-400",
-                      heartbeatStale && "text-yellow-400",
-                      heartbeatOld && "text-red-400"
-                    )}
-                  >
-                    ({heartbeatCurrent ? "Current" : formatRelativeTime(heartbeat, now)})
-                  </span>
+                  {queuePaused && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetQueuePaused(false)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600 text-xs"
+                    >
+                      <Play className="w-3 h-3" />
+                      Resume
+                    </button>
+                  )}
+                  {!queuePaused && (
+                    <button
+                      type="button"
+                      onClick={() => handleSetQueuePaused(true)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-700 text-gray-200 hover:bg-gray-600 text-xs"
+                    >
+                      <Pause className="w-3 h-3" />
+                      Pause
+                    </button>
+                  )}
                 </>
-              ) : (
-                "—"
               )}
             </div>
+            {multipleInstances && (
+              <div className="flex items-center gap-1.5 text-red-400 font-medium">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                Multiple backends detected
+              </div>
+            )}
+            {multipleInstances && backendInstances.length > 0 ? (
+              <div className="font-mono text-xs space-y-0.5 text-red-200/90">
+                {backendInstances.map((inst, i) => (
+                  <div key={inst.instance_id ?? i}>
+                    {inst.hostname || inst.instance_id || "Unknown"}: {formatHeartbeatTime(inst.last_heartbeat_utc)}{" "}
+                    <span className="text-red-300/80">
+                      ({inst.last_heartbeat_utc ? formatRelativeTime(inst.last_heartbeat_utc, now) : "—"})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="font-mono text-gray-300">
+                {heartbeat ? (
+                  <>
+                    {formatHeartbeatTime(heartbeat)}{" "}
+                    <span
+                      className={cn(
+                        "font-normal",
+                        heartbeatCurrent && "text-green-400",
+                        heartbeatStale && "text-yellow-400",
+                        heartbeatOld && "text-red-400"
+                      )}
+                    >
+                      ({heartbeatCurrent ? "Current" : formatRelativeTime(heartbeat, now)})
+                    </span>
+                  </>
+                ) : (
+                  "—"
+                )}
+              </div>
+            )}
           </div>
         </div>
 

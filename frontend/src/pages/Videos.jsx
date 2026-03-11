@@ -3,9 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { cn, formatDateTimeWithSeconds } from "../lib/utils";
 import {
-  Plus, Trash2, Download, FileSearch, EyeOff, Eye, Play, ArrowUp, ArrowDown, ArrowUpDown, Film,
+  Plus, Download, FileSearch, Play, ArrowUp, ArrowDown, ArrowUpDown, Film,
   CheckCircle, Loader2, Search, FileCheck, Brain, Settings, XCircle, AlertCircle, HelpCircle,
-  ListTodo, CalendarClock, MessageCircle, AlertTriangle, CircleDot,
+  ListTodo, CalendarClock, MessageCircle, CircleDot,
 } from "lucide-react";
 
 const STATUS_LABELS = {
@@ -75,6 +75,8 @@ import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
 import VideoPlayer from "../components/VideoPlayer";
 import { JobDetailsModal } from "../components/JobDetailsModal";
+import { VideoDetailsModal } from "../components/VideoDetailsModal";
+import { ChannelEditModal } from "../components/ChannelEditModal";
 
 export default function Videos({ setError }) {
   const toast = useToast();
@@ -90,6 +92,8 @@ export default function Videos({ setError }) {
   const [addForm, setAddForm] = useState({ provider_key: "", queue_download: true });
   const [playingVideo, setPlayingVideo] = useState(null);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const [videoIdForDetails, setVideoIdForDetails] = useState(null);
+  const [editingChannelId, setEditingChannelId] = useState(null);
   const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
 
   const loadVideos = useCallback(async () => {
@@ -144,30 +148,6 @@ export default function Videos({ setError }) {
       setShowAdd(false);
       loadVideos();
       toast.addToast(`Video added (ID ${v.video_id})${addForm.queue_download ? ", download queued" : ""}`, "success");
-    } catch (e) {
-      setError(e.message);
-      toast.addToast(e.message, "error");
-    }
-  };
-
-  const setIgnore = async (videoId, isIgnore) => {
-    if (!confirm(isIgnore ? "Ignore this video? It will be hidden from the default view." : "Unignore this video?")) return;
-    try {
-      await api.videos.update(videoId, { is_ignore: isIgnore });
-      loadVideos();
-      toast.addToast(isIgnore ? "Video ignored" : "Video unignored", "success");
-    } catch (e) {
-      setError(e.message);
-      toast.addToast(e.message, "error");
-    }
-  };
-
-  const deleteVideo = async (id) => {
-    if (!confirm("Delete this video?")) return;
-    try {
-      await api.videos.delete(id);
-      loadVideos();
-      toast.addToast("Video deleted", "success");
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
@@ -297,7 +277,15 @@ export default function Videos({ setError }) {
               <tr key={v.video_id} className="hover:bg-gray-800/30">
                 <td className="px-4 py-2 font-mono text-gray-300">{v.video_id}</td>
                 <td className="px-4 py-2">
-                  <span className="text-white">{v.title || v.provider_key || "—"}</span>
+                  <Tooltip title="Video details" side="top" wrap>
+                    <button
+                      type="button"
+                      onClick={() => setVideoIdForDetails(v.video_id)}
+                      className="text-white hover:text-blue-400 text-left"
+                    >
+                      {v.title || v.provider_key || "—"}
+                    </button>
+                  </Tooltip>
                 </td>
                 <td className="px-4 py-2 min-w-[140px]">
                   <div className="flex flex-col gap-0.5">
@@ -382,27 +370,6 @@ export default function Videos({ setError }) {
                       <Download className="w-4 h-4" />
                     </button>
                   </Tooltip>
-                  <Tooltip title={v.is_ignore ? "Unignore" : "Ignore"}>
-                    <button
-                      type="button"
-                      onClick={() => setIgnore(v.video_id, !v.is_ignore)}
-                      className={cn(
-                        "p-1.5 hover:bg-gray-700 rounded",
-                        v.is_ignore ? "text-yellow-400 hover:text-yellow-300" : "text-gray-400 hover:text-yellow-400"
-                      )}
-                    >
-                      {v.is_ignore ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                    </button>
-                  </Tooltip>
-                  <Tooltip title="Delete">
-                    <button
-                      type="button"
-                      onClick={() => deleteVideo(v.video_id)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </Tooltip>
                 </td>
               </tr>
             );
@@ -465,6 +432,21 @@ export default function Videos({ setError }) {
         </div>
       )}
 
+      <VideoDetailsModal
+        videoId={videoIdForDetails}
+        onClose={() => setVideoIdForDetails(null)}
+        setError={setError}
+        toast={toast}
+        onVideoUpdated={loadVideos}
+        onOpenJobDetails={(jobId) => setJobQueueIdForModal(jobId)}
+        onOpenChannelEdit={(channelId) => setEditingChannelId(channelId)}
+      />
+      <ChannelEditModal
+        channelId={editingChannelId}
+        onClose={() => setEditingChannelId(null)}
+        onSaved={loadVideos}
+        setError={setError}
+      />
       <JobDetailsModal
         jobId={jobQueueIdForModal}
         onClose={() => setJobQueueIdForModal(null)}

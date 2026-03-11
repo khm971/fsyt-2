@@ -7,12 +7,15 @@ import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, Al
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
+import { VideoDetailsModal } from "../components/VideoDetailsModal";
+import { ChannelEditModal } from "../components/ChannelEditModal";
 
 export default function Queue({ setError }) {
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const filterWarningsAndErrors = searchParams.get("filter") === "warnings_and_errors";
   const filterQueued = searchParams.get("filter") === "queued";
+  const filterScheduled = searchParams.get("filter") === "scheduled";
   const PAGE_SIZE = 500;
   const { jobs, totalCount, status: wsStatus, queueUpdatedAt } = useQueueWebSocket();
   const [control, setControl] = useState({});
@@ -20,6 +23,8 @@ export default function Queue({ setError }) {
   const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", priority: 50 });
   const [showAdd, setShowAdd] = useState(false);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const [videoIdForDetails, setVideoIdForDetails] = useState(null);
+  const [editingChannelId, setEditingChannelId] = useState(null);
   const [showAckAllModal, setShowAckAllModal] = useState(false);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("desc");
@@ -58,10 +63,13 @@ export default function Queue({ setError }) {
 
   const sortedJobs = useMemo(() => {
     let list = displayJobs;
+    const now = new Date();
     if (filterWarningsAndErrors) {
       list = list.filter((j) => j.error_flag || j.warning_flag);
     } else if (filterQueued) {
       list = list.filter((j) => j.status === "new");
+    } else if (filterScheduled) {
+      list = list.filter((j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now);
     }
     const copy = [...list];
     copy.sort((a, b) => {
@@ -95,7 +103,7 @@ export default function Queue({ setError }) {
       return 0;
     });
     return copy;
-  }, [displayJobs, sortBy, sortOrder, filterWarningsAndErrors, filterQueued]);
+  }, [displayJobs, sortBy, sortOrder, filterWarningsAndErrors, filterQueued, filterScheduled]);
 
   useEffect(() => {
     api.control
@@ -197,16 +205,17 @@ export default function Queue({ setError }) {
         <div className="bg-red-900/50 border border-red-600 rounded-lg px-4 py-3 flex items-center gap-3">
           <span className="text-red-400 font-semibold">Queue locked out</span>
           <span className="text-red-300 text-sm">
-            Too many chargeable errors. The job processor has stopped.
+            Too many charged errors. The job processor has stopped.
           </span>
         </div>
       )}
-      {(filterWarningsAndErrors || filterQueued) && (
+      {(filterWarningsAndErrors || filterQueued || filterScheduled) && (
         <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center justify-between gap-3">
           <span className="text-gray-300 text-sm flex items-center gap-2">
             <Filter className="w-4 h-4 text-blue-400" />
             {filterWarningsAndErrors && "Showing only jobs with errors or warnings"}
             {filterQueued && "Showing only queued jobs"}
+            {filterScheduled && "Showing only future scheduled jobs"}
           </span>
           <Link to="/queue" className="text-sm text-blue-400 hover:text-blue-300">
             Clear filter
@@ -442,7 +451,21 @@ export default function Queue({ setError }) {
                 <td className="px-4 py-2 font-mono text-gray-300">{j.job_queue_id}</td>
                 <td className="px-4 py-2 font-mono text-gray-400">{j.priority ?? "—"}</td>
                 <td className="px-4 py-2 text-white">{j.job_type}</td>
-                <td className="px-4 py-2 font-mono text-gray-400">{j.video_id ?? "—"}</td>
+                <td className="px-4 py-2 font-mono">
+                  {j.video_id != null ? (
+                    <Tooltip title="Video details" side="top" wrap>
+                      <button
+                        type="button"
+                        onClick={() => setVideoIdForDetails(j.video_id)}
+                        className="text-blue-400 hover:text-blue-300"
+                      >
+                        {j.video_id}
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-2">
                   <Tooltip title={j.status_message || ""} side="top">
                     <span
@@ -681,6 +704,21 @@ export default function Queue({ setError }) {
         </div>
       )}
 
+      <VideoDetailsModal
+        videoId={videoIdForDetails}
+        onClose={() => setVideoIdForDetails(null)}
+        setError={setError}
+        toast={toast}
+        onVideoUpdated={() => {}}
+        onOpenJobDetails={(jobId) => setJobQueueIdForModal(jobId)}
+        onOpenChannelEdit={(channelId) => setEditingChannelId(channelId)}
+      />
+      <ChannelEditModal
+        channelId={editingChannelId}
+        onClose={() => setEditingChannelId(null)}
+        onSaved={() => {}}
+        setError={setError}
+      />
       <JobDetailsModal
         jobId={jobQueueIdForModal}
         onClose={() => setJobQueueIdForModal(null)}

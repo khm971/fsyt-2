@@ -102,8 +102,8 @@ def log_event_sync(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id)
-                       VALUES (%s, %s, %s, %s, %s)""",
+                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname)
+                       VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
                     ((message or "")[:4096], severity, job_id, video_id, channel_id),
                 )
     except Exception:

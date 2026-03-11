@@ -1,6 +1,11 @@
 """FSYT2 FastAPI app: REST API + WebSocket for queue updates."""
 import asyncio
 import json
+import os
+import platform
+import socket
+import struct
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,8 +18,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import db
+from db_helpers import set_control_value
 from run_migrations import run_migrations
-from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_ERROR
+from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_WARNING, SEVERITY_ERROR
 from job_processor import run_job_loop, broadcast_queue_update
 from websocket_manager import ws_manager
 from video_progress_bridge import drain as drain_video_progress
@@ -29,6 +35,36 @@ from api.status import router as status_router
 from api.scheduler import router as scheduler_router
 from scheduler_service import start_scheduler, shutdown_scheduler
 from startup_cleanup import run_startup_cleanup
+from backend_instance_context import set_backend_instance
+
+
+def _get_host_info():
+    """Return dict of hostname, os, host_ip where each is only present if obtainable (Docker-safe)."""
+    out = {}
+    try:
+        out["hostname"] = socket.gethostname()
+    except Exception:
+        pass
+    try:
+        out["os"] = f"{platform.system()} {platform.release()}".strip()
+    except Exception:
+        pass
+    # Host IP: env var (e.g. from Docker), or on Linux the default gateway (Docker host bridge)
+    try:
+        if os.environ.get("HOST_IP"):
+            out["host_ip"] = os.environ["HOST_IP"].strip()
+        elif platform.system() == "Linux":
+            with open("/proc/net/route") as fh:
+                for line in fh:
+                    parts = line.strip().split()
+                    if len(parts) >= 3 and parts[1] == "00000000":
+                        gw_hex = parts[2]
+                        addr = socket.inet_ntoa(struct.pack("<L", int(gw_hex, 16)))
+                        out["host_ip"] = addr
+                        break
+    except Exception:
+        pass
+    return out
 
 
 async def _drain_video_progress_loop():
@@ -65,10 +101,94 @@ async def _transcode_progress_broadcast_loop():
         await asyncio.sleep(1.5)
 
 
+async def _backend_instance_heartbeat_loop(instance_id: uuid.UUID, hostname: str | None):
+    """Register this backend instance and broadcast multi-instance status; log on transitions."""
+    multiple_instances_previous: bool | None = None  # None = first run, set from initial count
+    while True:
+        try:
+            await db.execute(
+                """INSERT INTO backend_instances (instance_id, hostname, last_heartbeat_utc)
+                   VALUES ($1, $2, NOW())
+                   ON CONFLICT (instance_id) DO UPDATE SET
+                     hostname = EXCLUDED.hostname,
+                     last_heartbeat_utc = NOW()""",
+                instance_id,
+                hostname or "",
+            )
+            await db.execute(
+                """DELETE FROM backend_instances
+                   WHERE last_heartbeat_utc < NOW() - INTERVAL '1 minute'"""
+            )
+            count_row = await db.fetchrow(
+                """SELECT COUNT(*) AS n FROM backend_instances
+                   WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
+            )
+            count = int(count_row["n"] or 0)
+            multiple_now = count > 1
+
+            if multiple_instances_previous is None:
+                multiple_instances_previous = multiple_now
+                await log_event(
+                    f"Backend instance registered (instance_id={instance_id}, hostname={hostname or 'unknown'})",
+                    SEVERITY_DEBUG,
+                )
+            else:
+                if multiple_now and not multiple_instances_previous:
+                    await log_event(
+                        f"Multiple backend instances detected ({count} instances). Please stop duplicate instances.",
+                        SEVERITY_WARNING,
+                    )
+                    await set_control_value("queue_paused", "true")
+                    await log_event(
+                        "Queue auto-paused because multiple backend instances were detected. Resume manually after stopping duplicate instances.",
+                        SEVERITY_WARNING,
+                    )
+                    await broadcast_queue_update()
+                elif not multiple_now and multiple_instances_previous:
+                    await log_event(
+                        "Multiple backend instance condition cleared; only one instance is running.",
+                        SEVERITY_NOTICE,
+                    )
+                multiple_instances_previous = multiple_now
+
+            instances_rows = await db.fetch(
+                """SELECT instance_id, hostname, last_heartbeat_utc FROM backend_instances
+                   WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+                   ORDER BY last_heartbeat_utc DESC"""
+            )
+            instances = [
+                {
+                    "instance_id": str(r["instance_id"]),
+                    "hostname": r["hostname"] or "",
+                    "last_heartbeat_utc": r["last_heartbeat_utc"].isoformat() if r["last_heartbeat_utc"] else None,
+                }
+                for r in instances_rows
+            ]
+            await ws_manager.broadcast({
+                "type": "multi_instance_status",
+                "multiple_instances": multiple_now,
+                "instances": instances,
+            })
+        except Exception as e:
+            await log_event(
+                f"Backend instance heartbeat error: {type(e).__name__}: {e}",
+                SEVERITY_ERROR,
+            )
+        await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
-    await log_event("Application starting, database connected", SEVERITY_NOTICE)
+    host_info = _get_host_info()
+    parts = ["Application starting, database connected"]
+    if host_info.get("hostname"):
+        parts.append(f"hostname={host_info['hostname']}")
+    if host_info.get("os"):
+        parts.append(f"os={host_info['os']}")
+    if host_info.get("host_ip"):
+        parts.append(f"host_ip={host_info['host_ip']}")
+    await log_event("; ".join(parts), SEVERITY_NOTICE)
     await log_event("Running migrations", SEVERITY_DEBUG)
     try:
         await run_migrations()
@@ -87,6 +207,11 @@ async def lifespan(app: FastAPI):
     transcode_task = asyncio.create_task(_transcode_progress_broadcast_loop())
     await log_event("Starting scheduler", SEVERITY_DEBUG)
     await start_scheduler()
+    instance_id = uuid.uuid4()
+    hostname = host_info.get("hostname")
+    set_backend_instance(instance_id, hostname)
+    await log_event("Starting backend instance heartbeat", SEVERITY_DEBUG)
+    heartbeat_task = asyncio.create_task(_backend_instance_heartbeat_loop(instance_id, hostname))
     await log_event("System startup complete", SEVERITY_INFO)
     try:
         yield
@@ -118,6 +243,18 @@ async def lifespan(app: FastAPI):
                 SEVERITY_NOTICE,
             )
         shutdown_scheduler()
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await db.execute("DELETE FROM backend_instances WHERE instance_id = $1", instance_id)
+        except Exception as e:
+            await log_event(
+                f"Could not delete backend instance on shutdown: {type(e).__name__}: {e}",
+                SEVERITY_NOTICE,
+            )
         task.cancel()
         progress_task.cancel()
         transcode_task.cancel()

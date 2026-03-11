@@ -1,19 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { cn } from "../lib/utils";
-import { Plus, Pencil, Trash2, Download, RefreshCw, Image, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Download, RefreshCw, Image, ArrowUp, ArrowDown, ArrowUpDown, AlertTriangle } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
+import ConfirmModal from "../components/Modal";
+import { ChannelEditModal } from "../components/ChannelEditModal";
 
 export default function Channels({ setError }) {
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [channels, setChannels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("asc");
   const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState(null);
+  const [editingChannelId, setEditingChannelId] = useState(null);
+  const [confirmDeleteChannelId, setConfirmDeleteChannelId] = useState(null);
+  const [deleteChannelLoading, setDeleteChannelLoading] = useState(false);
   const [form, setForm] = useState({
     provider_key: "",
     handle: "",
@@ -56,15 +61,25 @@ export default function Channels({ setError }) {
   };
 
   const openEdit = (ch) => {
-    setEditing(ch);
-    setForm({
-      provider_key: ch.provider_key ?? "",
-      handle: ch.handle ?? "",
-      title: ch.title ?? "",
-      url: ch.url ?? "",
-      is_enabled_for_auto_download: ch.is_enabled_for_auto_download ?? false,
+    setEditingChannelId(ch.channel_id);
+  };
+
+  const closeEdit = () => {
+    setEditingChannelId(null);
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      p.delete("edit");
+      return p;
     });
   };
+
+  // When URL has ?edit=<id>, open edit modal for that channel
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    const id = editId != null && editId !== "" ? parseInt(editId, 10) : NaN;
+    if (!Number.isFinite(id)) return;
+    setEditingChannelId(id);
+  }, [searchParams]);
 
   const saveAdd = async () => {
     try {
@@ -78,28 +93,23 @@ export default function Channels({ setError }) {
     }
   };
 
-  const saveEdit = async () => {
-    if (!editing) return;
-    try {
-      await api.channels.update(editing.channel_id, form);
-      setEditing(null);
-      load();
-      toast.addToast("Channel updated", "success");
-    } catch (e) {
-      setError(e.message);
-      toast.addToast(e.message, "error");
-    }
+  const deleteChannel = (id) => {
+    setConfirmDeleteChannelId(id);
   };
 
-  const deleteChannel = async (id) => {
-    if (!confirm("Delete this channel?")) return;
+  const performDeleteChannel = async () => {
+    if (confirmDeleteChannelId == null) return;
+    setDeleteChannelLoading(true);
     try {
-      await api.channels.delete(id);
+      await api.channels.delete(confirmDeleteChannelId);
       load();
       toast.addToast("Channel deleted", "success");
+      setConfirmDeleteChannelId(null);
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
+    } finally {
+      setDeleteChannelLoading(false);
     }
   };
 
@@ -260,7 +270,7 @@ export default function Channels({ setError }) {
                   <Tooltip title="Delete">
                     <button
                       type="button"
-                      onClick={() => deleteChannel(ch.channel_id)}
+                      onClick={() => setConfirmDeleteChannelId(ch.channel_id)}
                       className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -276,6 +286,39 @@ export default function Channels({ setError }) {
         )}
       </div>
 
+      {confirmDeleteChannelId != null && (
+        <ConfirmModal title="Delete channel" onClose={() => !deleteChannelLoading && setConfirmDeleteChannelId(null)}>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border border-red-900/60 bg-red-950/30 p-4">
+              <div className="rounded-full bg-red-900/50 p-2 text-red-300">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium text-white">
+                Are you sure you want to delete this channel?
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteChannelId(null)}
+                disabled={deleteChannelLoading}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={performDeleteChannel}
+                disabled={deleteChannelLoading}
+                className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+              >
+                {deleteChannelLoading ? "Deleting…" : "Yes, delete channel"}
+              </button>
+            </div>
+          </div>
+        </ConfirmModal>
+      )}
+
       {showAdd && (
         <Modal title="Add channel" onClose={() => setShowAdd(false)}>
           <ChannelForm form={form} setForm={setForm} />
@@ -290,19 +333,15 @@ export default function Channels({ setError }) {
         </Modal>
       )}
 
-      {editing && (
-        <Modal title="Edit channel" onClose={() => setEditing(null)}>
-          <ChannelForm form={form} setForm={setForm} />
-          <div className="flex justify-end gap-2 mt-4">
-            <button type="button" onClick={() => setEditing(null)} className="btn-secondary">
-              Cancel
-            </button>
-            <button type="button" onClick={saveEdit} className="btn-primary">
-              Save
-            </button>
-          </div>
-        </Modal>
-      )}
+      <ChannelEditModal
+        channelId={editingChannelId}
+        onClose={closeEdit}
+        onSaved={() => {
+          load();
+          toast.addToast("Channel updated", "success");
+        }}
+        setError={setError}
+      />
     </div>
   );
 }

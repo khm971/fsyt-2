@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 
 from database import db
 from api.schemas import ControlSet, ControlResponse
+from job_processor import broadcast_queue_update
 from log_helper import log_event, SEVERITY_NOTICE
 
 router = APIRouter(prefix="/control", tags=["control"])
@@ -52,9 +53,10 @@ async def set_control(key: str, body: ControlSet):
     if key == "queue_paused":
         is_paused = str(body.value).strip().lower() in ("true", "1", "t", "yes")
         await log_event(
-            "Queue paused" if is_paused else "Queue started",
+            "Queue paused" if is_paused else "Queue resumed",
             SEVERITY_NOTICE,
         )
+        await broadcast_queue_update()
     return ControlResponse(
         key=r["key"],
         index=r["index"],

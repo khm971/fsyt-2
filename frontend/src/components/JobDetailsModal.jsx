@@ -7,6 +7,7 @@ import {
   Hash, Users, Calendar, RefreshCw, Activity, ArrowUp, FileText, Braces, ClipboardList,
 } from "lucide-react";
 import { Tooltip } from "./Tooltip";
+import Modal from "./Modal";
 
 const JOB_TYPE_ICONS = {
   download_video: Download,
@@ -49,6 +50,8 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
   const [jobDetails, setJobDetails] = useState(null);
   const [loading, setLoading] = useState(false);
   const [schedulerEntryName, setSchedulerEntryName] = useState(null);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [cancelJobLoading, setCancelJobLoading] = useState(false);
 
   useEffect(() => {
     if (jobId == null) {
@@ -114,6 +117,17 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
       onJobCanceled?.();
     } catch (e) {
       setError(e.message);
+    }
+  };
+
+  const handleCancelJobConfirm = async () => {
+    setCancelJobLoading(true);
+    try {
+      await cancelJob();
+      setShowCancelConfirm(false);
+    } finally {
+      setCancelJobLoading(false);
+      setShowCancelConfirm(false);
     }
   };
 
@@ -379,7 +393,7 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
               {jobDetails.status === "new" && (
                 <button
                   type="button"
-                  onClick={cancelJob}
+                  onClick={() => setShowCancelConfirm(true)}
                   className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded"
                 >
                   Cancel job
@@ -395,6 +409,39 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
           <div className="text-gray-400 py-4">Job not found.</div>
         )}
       </div>
+
+      {showCancelConfirm && (
+        <Modal title="Cancel job" onClose={() => !cancelJobLoading && setShowCancelConfirm(false)}>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border border-red-900/60 bg-red-950/30 p-4">
+              <div className="rounded-full bg-red-900/50 p-2 text-red-300">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium text-white">
+                Are you sure you want to cancel this job?
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirm(false)}
+                disabled={cancelJobLoading}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Keep job
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelJobConfirm}
+                disabled={cancelJobLoading}
+                className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+              >
+                {cancelJobLoading ? "Cancelling…" : "Yes, cancel job"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

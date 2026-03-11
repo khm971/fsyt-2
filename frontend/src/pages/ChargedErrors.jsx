@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { api } from "../api/client";
 import { formatDateTime } from "../lib/utils";
 import { useToast } from "../context/ToastContext";
+import { cn } from "../lib/utils";
 import Modal from "../components/Modal";
+import { Tooltip } from "../components/Tooltip";
 
 function mapControls(list) {
   const next = {};
@@ -22,6 +24,8 @@ export default function ChargedErrors({ setError }) {
   const [isClearing, setIsClearing] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
   const [turningOffLockout, setTurningOffLockout] = useState(false);
+  const [sortBy, setSortBy] = useState("date");
+  const [sortOrder, setSortOrder] = useState("desc");
 
   const load = useCallback(async () => {
     try {
@@ -90,7 +94,7 @@ export default function ChargedErrors({ setError }) {
           value: "false",
         },
       }));
-      toast.addToast("Chargeable Errors Lockout turned off.", "success");
+      toast.addToast("Charged Errors Lockout turned off.", "success");
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
@@ -121,13 +125,42 @@ export default function ChargedErrors({ setError }) {
 
   const hasUndismissed = errors.some((e) => !e.is_dismissed);
 
+  const sortedErrors = useMemo(() => {
+    const copy = [...errors];
+    copy.sort((a, b) => {
+      let aVal, bVal;
+      if (sortBy === "id") {
+        aVal = a.charged_error_id;
+        bVal = b.charged_error_id;
+      } else if (sortBy === "date") {
+        aVal = a.error_date ? new Date(a.error_date).getTime() : 0;
+        bVal = b.error_date ? new Date(b.error_date).getTime() : 0;
+      } else if (sortBy === "error_code") {
+        aVal = a.error_code ?? "";
+        bVal = b.error_code ?? "";
+      } else if (sortBy === "message") {
+        aVal = a.message ?? "";
+        bVal = b.message ?? "";
+      } else if (sortBy === "actions") {
+        aVal = a.is_dismissed ? 1 : 0;
+        bVal = b.is_dismissed ? 1 : 0;
+      } else {
+        return 0;
+      }
+      if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    });
+    return copy;
+  }, [errors, sortBy, sortOrder]);
+
   if (loading) {
     return <div className="text-gray-400 py-8">Loading...</div>;
   }
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+    <div className="space-y-6 min-w-0">
+      <div className="rounded-lg border border-gray-800 bg-gray-900 p-5 min-w-0">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h3 className="text-lg font-semibold text-white">Charged Errors</h3>
@@ -157,10 +190,10 @@ export default function ChargedErrors({ setError }) {
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-white">
-                    Chargeable Errors Lockout is active
+                    Charged Errors Lockout is active
                   </p>
                   <p className="text-sm text-gray-400 mt-0.5">
-                    The queue is locked out due to too many chargeable errors. Turn off lockout to resume processing.
+                    The queue is locked out due to too many charged errors. Turn off lockout to resume processing.
                   </p>
                 </div>
               </div>
@@ -176,30 +209,101 @@ export default function ChargedErrors({ setError }) {
           ) : (
             <div className="rounded-xl border border-gray-700 bg-gray-800/50 p-4">
               <p className="text-sm text-gray-400">
-                Chargeable Errors Lockout is not active.
+                Charged errors lockout is not active.
               </p>
             </div>
           )}
         </div>
 
         {/* Table */}
-        <div className="mt-6 overflow-x-auto">
+        <div className="mt-6 min-w-0 overflow-x-hidden">
           {errors.length === 0 ? (
             <p className="text-gray-400 text-sm py-4">No charged errors.</p>
           ) : (
-            <table className="w-full text-sm">
+            <table className="w-full min-w-0 table-fixed text-sm">
+              <colgroup>
+                <col style={{ width: "5%" }} />
+                <col style={{ width: "14%" }} />
+                <col style={{ width: "12%" }} />
+                <col style={{ width: "55%" }} />
+                <col style={{ width: "14%" }} />
+              </colgroup>
               <thead>
                 <tr className="border-b border-gray-800 text-left text-gray-400">
-                  <th className="px-4 py-2">ID</th>
-                  <th className="px-4 py-2">Date</th>
-                  <th className="px-4 py-2">Error code</th>
-                  <th className="px-4 py-2">Message</th>
-                  <th className="px-4 py-2">Dismissed</th>
-                  <th className="px-4 py-2">Actions</th>
+                  <th className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      ID
+                      <Tooltip title={sortBy === "id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by ID"}>
+                        <button
+                          type="button"
+                          onClick={() => { if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
+                          className={cn("p-0.5 rounded hover:bg-gray-700", sortBy === "id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400")}
+                        >
+                          {sortBy === "id" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      Date
+                      <Tooltip title={sortBy === "date" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Date"}>
+                        <button
+                          type="button"
+                          onClick={() => { if (sortBy === "date") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("date"); setSortOrder("desc"); } }}
+                          className={cn("p-0.5 rounded hover:bg-gray-700", sortBy === "date" ? "text-blue-400" : "text-gray-500 hover:text-gray-400")}
+                        >
+                          {sortBy === "date" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      Error code
+                      <Tooltip title={sortBy === "error_code" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Error code"}>
+                        <button
+                          type="button"
+                          onClick={() => { if (sortBy === "error_code") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("error_code"); setSortOrder("asc"); } }}
+                          className={cn("p-0.5 rounded hover:bg-gray-700", sortBy === "error_code" ? "text-blue-400" : "text-gray-500 hover:text-gray-400")}
+                        >
+                          {sortBy === "error_code" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      Message
+                      <Tooltip title={sortBy === "message" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Message"}>
+                        <button
+                          type="button"
+                          onClick={() => { if (sortBy === "message") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("message"); setSortOrder("asc"); } }}
+                          className={cn("p-0.5 rounded hover:bg-gray-700", sortBy === "message" ? "text-blue-400" : "text-gray-500 hover:text-gray-400")}
+                        >
+                          {sortBy === "message" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </th>
+                  <th className="px-4 py-2">
+                    <div className="flex items-center gap-1">
+                      Actions
+                      <Tooltip title={sortBy === "actions" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Actions (dismissed/undismissed)"}>
+                        <button
+                          type="button"
+                          onClick={() => { if (sortBy === "actions") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("actions"); setSortOrder("desc"); } }}
+                          className={cn("p-0.5 rounded hover:bg-gray-700", sortBy === "actions" ? "text-blue-400" : "text-gray-500 hover:text-gray-400")}
+                        >
+                          {sortBy === "actions" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {errors.map((e) => (
+                {sortedErrors.map((e) => (
                   <tr key={e.charged_error_id} className="border-b border-gray-800/50">
                     <td className="px-4 py-2 text-gray-500 font-mono">
                       {e.charged_error_id}
@@ -212,9 +316,6 @@ export default function ChargedErrors({ setError }) {
                     </td>
                     <td className="px-4 py-2 text-gray-300 max-w-md truncate" title={e.message ?? ""}>
                       {e.message ?? "—"}
-                    </td>
-                    <td className="px-4 py-2 text-gray-400">
-                      {e.is_dismissed ? "Yes" : "No"}
                     </td>
                     <td className="px-4 py-2">
                       {e.is_dismissed ? (

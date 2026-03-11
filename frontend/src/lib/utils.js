@@ -74,7 +74,8 @@ export function formatHeartbeatTime(isoString) {
 }
 
 /**
- * Relative time for heartbeat: "(10 seconds ago)", "(2 days ago)", or "(Just Now)" if in the future.
+ * Relative time for heartbeat: "10 seconds ago", "2 days ago", or "Just Now" if in the future.
+ * Caller typically wraps in parentheses, e.g. (Current) or (5 hours ago).
  * @param {string} isoString - ISO date string
  * @param {Date} [now] - Reference time (default: new Date()); pass from state to get live updates.
  */
@@ -83,15 +84,15 @@ export function formatRelativeTime(isoString, now = new Date()) {
   const d = new Date(isoString);
   if (Number.isNaN(d.getTime())) return "";
   const diffMs = now.getTime() - d.getTime();
-  if (diffMs < 0) return "(Just Now)";
+  if (diffMs < 0) return "Just Now";
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHr = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHr / 24);
-  if (diffSec < 60) return `(${diffSec} second${diffSec === 1 ? "" : "s"} ago)`;
-  if (diffMin < 60) return `(${diffMin} minute${diffMin === 1 ? "" : "s"} ago)`;
-  if (diffHr < 24) return `(${diffHr} hour${diffHr === 1 ? "" : "s"} ago)`;
-  return `(${diffDay} day${diffDay === 1 ? "" : "s"} ago)`;
+  if (diffSec < 60) return `${diffSec} second${diffSec === 1 ? "" : "s"} ago`;
+  if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? "" : "s"} ago`;
+  if (diffHr < 24) return `${diffHr} hour${diffHr === 1 ? "" : "s"} ago`;
+  return `${diffDay} day${diffDay === 1 ? "" : "s"} ago`;
 }
 
 /**
