@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback } from "react";
-import { getWsUrl } from "../api/client";
+import { getWsUrl, api } from "../api/client";
 
 const RECONNECT_INTERVAL_MS = 5000;
+const INITIAL_QUEUE_LIMIT = 500;
 
 const QueueWebSocketContext = createContext(null);
 
@@ -23,6 +24,7 @@ export function QueueWebSocketProvider({ children }) {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const wasClosedRef = useRef(false);
+  const hasReceivedQueueUpdateRef = useRef(false);
 
   const send = useCallback((message) => {
     const ws = wsRef.current;
@@ -57,6 +59,7 @@ export function QueueWebSocketProvider({ children }) {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "queue_update" && Array.isArray(msg.jobs)) {
+          hasReceivedQueueUpdateRef.current = true;
           setJobs(msg.jobs);
           setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
           setQueueUpdatedAt(Date.now());
@@ -111,6 +114,24 @@ export function QueueWebSocketProvider({ children }) {
       wsRef.current = null;
     };
   }, [connect]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.queue
+      .list({ limit: INITIAL_QUEUE_LIMIT })
+      .then((res) => {
+        if (cancelled) return;
+        if (!hasReceivedQueueUpdateRef.current && res?.items) {
+          setJobs(res.items);
+          setTotalCount(typeof res.total === "number" ? res.total : (res.items?.length ?? 0));
+          setQueueUpdatedAt(Date.now());
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const value = {
     jobs,

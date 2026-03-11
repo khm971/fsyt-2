@@ -17,7 +17,7 @@ export default function Queue({ setError }) {
   const filterQueued = searchParams.get("filter") === "queued";
   const filterScheduled = searchParams.get("filter") === "scheduled";
   const PAGE_SIZE = 500;
-  const { jobs, totalCount, status: wsStatus, queueUpdatedAt } = useQueueWebSocket();
+  const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides } = useQueueWebSocket();
   const [control, setControl] = useState({});
   const [paused, setPaused] = useState(false);
   const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", priority: 50 });
@@ -467,19 +467,37 @@ export default function Queue({ setError }) {
                   )}
                 </td>
                 <td className="px-4 py-2">
-                  <Tooltip title={j.status_message || ""} side="top">
-                    <span
-                      className={cn(
-                        "inline-block",
-                        j.status === "done" && "text-green-400",
-                        j.status === "running" && "text-blue-400",
-                        j.status === "error" && "text-red-400",
-                        j.status === "new" && "text-gray-400"
-                      )}
-                    >
-                      {j.status}
-                    </span>
-                  </Tooltip>
+                  <div className="flex flex-col gap-0.5">
+                    <Tooltip title={j.status_message || ""} side="top">
+                      <span
+                        className={cn(
+                          "inline-block",
+                          j.status === "done" && "text-green-400",
+                          j.status === "running" && "text-blue-400",
+                          j.status === "error" && "text-red-400",
+                          j.status === "new" && "text-gray-400"
+                        )}
+                      >
+                        {j.status}
+                      </span>
+                    </Tooltip>
+                    {(() => {
+                      const percent =
+                        j.video_id != null && videoProgressOverrides[j.video_id]?.status_percent_complete != null
+                          ? videoProgressOverrides[j.video_id].status_percent_complete
+                          : j.status_percent_complete;
+                      return percent != null && percent >= 1 && percent <= 99 ? (
+                        <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                            style={{
+                              width: `${Math.min(100, Math.max(0, Number(percent) || 0))}%`,
+                            }}
+                          />
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
                 </td>
                 <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
                   {formatDateTimeWithSeconds(j.record_created)}

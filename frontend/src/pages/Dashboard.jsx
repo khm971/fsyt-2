@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
 import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter, formatDateTimeWithSeconds } from "../lib/utils";
-import { Activity, Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play } from "lucide-react";
+import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 
@@ -27,7 +27,7 @@ export default function Dashboard({ setError }) {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
-  const { jobs, status: wsStatus, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer } = useQueueWebSocket();
+  const { jobs, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides } = useQueueWebSocket();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -142,7 +142,7 @@ export default function Dashboard({ setError }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
           <Link
             to="/queue"
@@ -192,6 +192,23 @@ export default function Dashboard({ setError }) {
                 </span>
               )}
             </div>
+            {running.length > 0 && (() => {
+              const job = running[0];
+              const percent =
+                job.video_id != null && videoProgressOverrides[job.video_id]?.status_percent_complete != null
+                  ? videoProgressOverrides[job.video_id].status_percent_complete
+                  : job.status_percent_complete;
+              return percent != null && percent >= 1 && percent <= 99 ? (
+                <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, Number(percent) || 0))}%`,
+                    }}
+                  />
+                </div>
+              ) : null;
+            })()}
             {(errors.length > 0 || warnings.length > 0) && (
               <div className="flex items-center gap-2 flex-wrap">
                 {errors.length > 0 && (
@@ -338,24 +355,6 @@ export default function Dashboard({ setError }) {
                 )}
               </div>
             )}
-          </div>
-        </div>
-
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-          <div className="flex items-center gap-2 text-gray-400 text-sm mb-1">
-            <Activity className="w-4 h-4" />
-            WebSocket
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                "w-2 h-2 rounded-full",
-                wsStatus === "open" && "bg-green-500",
-                wsStatus === "connecting" && "bg-yellow-500",
-                wsStatus === "closed" && "bg-red-500"
-              )}
-            />
-            <span className="text-white">{wsStatus}</span>
           </div>
         </div>
 
