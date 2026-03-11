@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
@@ -27,7 +27,8 @@ export default function Dashboard({ setError }) {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
-  const { jobs, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides } = useQueueWebSocket();
+  const queueRefreshTriggeredRef = useRef(false);
+  const { jobs, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshQueue } = useQueueWebSocket();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -118,6 +119,12 @@ export default function Dashboard({ setError }) {
     futureScheduled.length > 0 && nextScheduledRunAfter != null
       ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfter)
       : null;
+  useEffect(() => {
+    if (jobs.length === 0 && refreshQueue && !queueRefreshTriggeredRef.current) {
+      queueRefreshTriggeredRef.current = true;
+      refreshQueue();
+    }
+  }, [jobs.length, refreshQueue]);
   const lastScheduledJob =
     jobsWithRunAfter.length > 0 && lastScheduledRunAfter != null
       ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfter)

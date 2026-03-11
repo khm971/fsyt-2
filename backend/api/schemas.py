@@ -5,6 +5,46 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+# ----- Tag -----
+class TagBase(BaseModel):
+    title: str
+    bg_color: Optional[str] = None
+    fg_color: Optional[str] = None
+    icon_before: Optional[str] = None
+    icon_after: Optional[str] = None
+
+
+class TagCreate(BaseModel):
+    title: str
+    bg_color: Optional[str] = None
+    fg_color: Optional[str] = None
+    icon_before: Optional[str] = None
+    icon_after: Optional[str] = None
+
+
+class TagUpdate(BaseModel):
+    title: Optional[str] = None
+    bg_color: Optional[str] = None
+    fg_color: Optional[str] = None
+    icon_before: Optional[str] = None
+    icon_after: Optional[str] = None
+
+
+class TagResponse(BaseModel):
+    tag_id: int
+    user_id: int
+    title: str
+    bg_color: Optional[str] = None
+    fg_color: Optional[str] = None
+    icon_before: Optional[str] = None
+    icon_after: Optional[str] = None
+    is_system: bool = False
+    video_count: Optional[int] = None  # number of videos with this tag (when from video context)
+
+    class Config:
+        from_attributes = True
+
+
 # ----- Channel -----
 class ChannelBase(BaseModel):
     provider_key: Optional[str] = None
@@ -60,6 +100,7 @@ class VideoBase(BaseModel):
 class VideoCreate(BaseModel):
     provider_key: str
     queue_download: bool = False
+    tag_needs_review: bool = True
 
 
 class VideoUpdate(BaseModel):
@@ -78,6 +119,7 @@ class VideoResponse(VideoBase):
     watch_is_finished: Optional[bool] = None
     pending_job_id: Optional[int] = None
     pending_job_type: Optional[str] = None
+    tags: Optional[list[TagResponse]] = None
 
     class Config:
         from_attributes = True

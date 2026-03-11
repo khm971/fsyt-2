@@ -24,7 +24,7 @@ export function QueueWebSocketProvider({ children }) {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const wasClosedRef = useRef(false);
-  const hasReceivedQueueUpdateRef = useRef(false);
+  const jobsRef = useRef([]);
 
   const send = useCallback((message) => {
     const ws = wsRef.current;
@@ -59,9 +59,13 @@ export function QueueWebSocketProvider({ children }) {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "queue_update" && Array.isArray(msg.jobs)) {
-          hasReceivedQueueUpdateRef.current = true;
-          setJobs(msg.jobs);
-          setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
+          const hasJobs = msg.jobs.length > 0;
+          const hadJobs = jobsRef.current.length > 0;
+          if (hasJobs || !hadJobs) {
+            jobsRef.current = msg.jobs;
+            setJobs(msg.jobs);
+            setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
+          }
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
           if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
@@ -115,23 +119,23 @@ export function QueueWebSocketProvider({ children }) {
     };
   }, [connect]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshQueue = useCallback(() => {
     api.queue
       .list({ limit: INITIAL_QUEUE_LIMIT })
       .then((res) => {
-        if (cancelled) return;
-        if (!hasReceivedQueueUpdateRef.current && res?.items) {
+        if (res?.items && Array.isArray(res.items)) {
+          jobsRef.current = res.items;
           setJobs(res.items);
-          setTotalCount(typeof res.total === "number" ? res.total : (res.items?.length ?? 0));
+          setTotalCount(typeof res.total === "number" ? res.total : res.items.length);
           setQueueUpdatedAt(Date.now());
         }
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    refreshQueue();
+  }, [refreshQueue]);
 
   const value = {
     jobs,
@@ -149,6 +153,7 @@ export function QueueWebSocketProvider({ children }) {
     backendInstances,
     queuePausedFromServer,
     send,
+    refreshQueue,
   };
 
   return (

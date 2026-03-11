@@ -1,6 +1,9 @@
-export default function Modal({ title, onClose, children, maxWidthClass = "max-w-md" }) {
+export default function Modal({ title, onClose, children, maxWidthClass = "max-w-md", closeOnBackdropClick = true }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+      onClick={closeOnBackdropClick ? onClose : (e) => e.stopPropagation()}
+    >
       <div
         className={`w-full ${maxWidthClass} rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl`}
         onClick={(e) => e.stopPropagation()}

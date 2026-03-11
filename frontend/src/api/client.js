@@ -27,6 +27,15 @@ async function apiFetch(path, options = {}) {
 export const api = {
   health: () => apiFetch("/health"),
 
+  tags: {
+    list: () => apiFetch("/tags"),
+    search: (q) => apiFetch(`/tags/search?q=${encodeURIComponent(q)}`),
+    get: (id) => apiFetch(`/tags/${id}`),
+    create: (body) => apiFetch("/tags", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => apiFetch(`/tags/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    delete: (id) => apiFetch(`/tags/${id}`, { method: "DELETE" }),
+  },
+
   channels: {
     list: (params = {}) => {
       const q = new URLSearchParams();
@@ -48,6 +57,16 @@ export const api = {
       const query = q.toString();
       return apiFetch(`/videos/watch${query ? `?${query}` : ""}`);
     },
+    listByTags: (params = {}) => {
+      const q = new URLSearchParams();
+      if (Array.isArray(params.tag_ids) && params.tag_ids.length > 0) {
+        params.tag_ids.forEach((id) => q.append("tag_ids", id));
+      }
+      if (params.tag_match != null) q.set("tag_match", params.tag_match);
+      if (params.limit != null) q.set("limit", params.limit);
+      const query = q.toString();
+      return apiFetch(`/videos/by-tags${query ? `?${query}` : ""}`);
+    },
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.channel_id != null) q.set("channel_id", params.channel_id);
@@ -59,6 +78,11 @@ export const api = {
       return apiFetch(`/videos${query ? `?${query}` : ""}`);
     },
     get: (id) => apiFetch(`/videos/${id}`),
+    getTags: (videoId) => apiFetch(`/videos/${videoId}/tags`),
+    addTag: (videoId, body) =>
+      apiFetch(`/videos/${videoId}/tags`, { method: "POST", body: JSON.stringify(body) }),
+    removeTag: (videoId, tagId) =>
+      apiFetch(`/videos/${videoId}/tags/${tagId}`, { method: "DELETE" }),
     streamUrl: (id, options = {}) => {
       const base = `${API.replace(/\/$/, "")}/videos/${id}/stream`;
       if (options.transcode) return `${base}?transcode=1`;
@@ -71,7 +95,8 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ progress_seconds: progressSeconds, progress_percent: progressPercent }),
       }),
-    create: (body) => apiFetch("/videos", { method: "POST", body: JSON.stringify(body) }),
+    create: (body) =>
+      apiFetch("/videos", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/videos/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     delete: (id) => apiFetch(`/videos/${id}`, { method: "DELETE" }),
   },
@@ -110,6 +135,7 @@ export const api = {
     create: (body) => apiFetch("/scheduler", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/scheduler/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     delete: (id) => apiFetch(`/scheduler/${id}`, { method: "DELETE" }),
+    runNow: (id) => apiFetch(`/scheduler/${id}/run-now`, { method: "POST" }),
   },
 
   maintenance: {

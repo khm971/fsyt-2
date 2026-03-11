@@ -7,7 +7,7 @@ from api.schemas import (
     SchedulerEntryUpdate,
     SchedulerEntryResponse,
 )
-from scheduler_service import get_next_run_at, reload_scheduler
+from scheduler_service import get_next_run_at, reload_scheduler, run_entry_now
 from log_helper import log_event, SEVERITY_INFO
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
@@ -161,6 +161,16 @@ async def update_entry(entry_id: int, body: SchedulerEntryUpdate):
     )
     await reload_scheduler()
     return _row_to_response(r)
+
+
+@router.post("/{entry_id}/run-now", status_code=200)
+async def run_now(entry_id: int):
+    """Run a scheduler entry once immediately. Allowed even when the entry is disabled.
+    Does not change next run time; updates last run and logs at Info that the job was run manually."""
+    result = await run_entry_now(entry_id)
+    if result is None:
+        raise HTTPException(404, "Scheduler entry not found")
+    return result
 
 
 @router.delete("/{entry_id}", status_code=204)

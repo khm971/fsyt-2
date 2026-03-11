@@ -26,6 +26,27 @@ def get_next_run_at(cron_expression: str) -> datetime | None:
         return None
 
 
+async def _enqueue_job_from_entry(entry) -> dict:
+    """Enqueue one job from a scheduler_entry row. Returns row with job_queue_id, video_id, channel_id."""
+    sid = entry["scheduler_entry_id"]
+    row = await db.fetchrow(
+        """INSERT INTO job_queue (
+            job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
+            status, priority, scheduler_entry_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8)
+        RETURNING job_queue_id, video_id, channel_id""",
+        entry["job_type"],
+        entry["video_id"],
+        entry["channel_id"],
+        entry["other_target_id"],
+        entry["parameter"],
+        entry["extended_parameters"],
+        entry["priority"],
+        sid,
+    )
+    return dict(row)
+
+
 async def _fire_entry(scheduler_entry_id: int) -> None:
     """Called when a scheduler entry's cron fires: enqueue one job and update last/next run."""
     entry = await db.fetchrow(
@@ -42,21 +63,7 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
         return
     name = entry["name"]
     try:
-        row = await db.fetchrow(
-            """INSERT INTO job_queue (
-                job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-                status, priority, scheduler_entry_id
-            ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8)
-            RETURNING job_queue_id, video_id, channel_id""",
-            entry["job_type"],
-            entry["video_id"],
-            entry["channel_id"],
-            entry["other_target_id"],
-            entry["parameter"],
-            entry["extended_parameters"],
-            entry["priority"],
-            scheduler_entry_id,
-        )
+        row = await _enqueue_job_from_entry(entry)
         job_queue_id = row["job_queue_id"]
         now = datetime.now()
         next_run = get_next_run_at(entry["cron_expression"])
@@ -82,6 +89,40 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
             SEVERITY_ERROR,
         )
         raise
+
+
+async def run_entry_now(scheduler_entry_id: int) -> dict | None:
+    """Run a scheduler entry once immediately. Allowed even when entry is disabled.
+    Updates only last_run_at (not next_run_at). Logs at Info that job was run manually.
+    Returns dict with job_queue_id and name on success, None if entry not found."""
+    entry = await db.fetchrow(
+        """SELECT scheduler_entry_id, name, job_type, video_id, channel_id, other_target_id,
+                  parameter, extended_parameters, priority
+           FROM scheduler_entry WHERE scheduler_entry_id = $1""",
+        scheduler_entry_id,
+    )
+    if not entry:
+        return None
+    name = entry["name"]
+    row = await _enqueue_job_from_entry(entry)
+    job_queue_id = row["job_queue_id"]
+    now = datetime.now()
+    await db.execute(
+        """UPDATE scheduler_entry SET last_run_at = $1, record_updated = $2
+           WHERE scheduler_entry_id = $3""",
+        now,
+        now,
+        scheduler_entry_id,
+    )
+    await broadcast_queue_update()
+    await log_event(
+        f"Scheduler entry run manually: {name!r} (id={scheduler_entry_id}) -> job_queue_id={job_queue_id}, job_type={entry['job_type']!r}",
+        SEVERITY_INFO,
+        job_id=job_queue_id,
+        video_id=row.get("video_id"),
+        channel_id=row.get("channel_id"),
+    )
+    return {"job_queue_id": job_queue_id, "name": name}
 
 
 async def start_scheduler() -> None:

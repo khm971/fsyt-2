@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
 import { formatDateTime } from "../lib/utils";
-import { CalendarClock, Pencil, Trash2, History, Search, AlertTriangle } from "lucide-react";
+import { CalendarClock, Pencil, Trash2, History, Search, AlertTriangle, Play } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import Modal from "../components/Modal";
 import { Tooltip } from "../components/Tooltip";
@@ -68,6 +68,7 @@ export default function JobScheduler({ setError }) {
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [confirmDeleteEntry, setConfirmDeleteEntry] = useState(null);
   const [deleteEntryLoading, setDeleteEntryLoading] = useState(false);
+  const [runNowEntryId, setRunNowEntryId] = useState(null);
   const [channels, setChannels] = useState([]);
   const [videos, setVideos] = useState([]);
 
@@ -181,9 +182,24 @@ export default function JobScheduler({ setError }) {
     }
   };
 
+  const runNowClick = async (entry) => {
+    const id = entry.scheduler_entry_id;
+    setRunNowEntryId(id);
+    try {
+      await api.scheduler.runNow(id);
+      toast.addToast("Job queued", "success");
+      loadEntries();
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+    } finally {
+      setRunNowEntryId(null);
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border border-gray-800 bg-gray-900 p-5">
+    <div className="space-y-6 min-w-0 overflow-x-hidden">
+      <div className="rounded-lg border border-gray-800 bg-gray-900 p-5 min-w-0">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h3 className="text-lg font-semibold text-white">Job Scheduler</h3>
@@ -200,8 +216,8 @@ export default function JobScheduler({ setError }) {
         {loading ? (
           <p className="mt-4 text-gray-400">Loading…</p>
         ) : (
-          <div className="mt-6 overflow-x-auto">
-            <table className="w-full text-left text-sm">
+          <div className="mt-6 min-w-0 overflow-x-hidden">
+            <table className="w-full min-w-0 text-left text-sm">
               <thead className="text-gray-400 border-b border-gray-800">
                 <tr>
                   <th className="pb-3 pr-4 font-medium">Name</th>
@@ -227,6 +243,16 @@ export default function JobScheduler({ setError }) {
                       </span>
                     </td>
                     <td className="py-3 pr-4 flex items-center gap-1">
+                      <Tooltip title="Run now" side="top">
+                        <button
+                          type="button"
+                          onClick={() => runNowClick(e)}
+                          disabled={runNowEntryId === e.scheduler_entry_id}
+                          className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded disabled:opacity-50"
+                        >
+                          <Play className="h-4 w-4" />
+                        </button>
+                      </Tooltip>
                       <Tooltip title="Edit" side="top">
                         <button
                           type="button"

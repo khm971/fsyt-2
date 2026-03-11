@@ -25,6 +25,7 @@ from job_processor import run_job_loop, broadcast_queue_update
 from websocket_manager import ws_manager
 from video_progress_bridge import drain as drain_video_progress
 from api.channels import router as channels_router
+from api.tags import router as tags_router
 from api.videos import router as videos_router, _save_watch_progress, get_active_transcodes
 from api.queue import router as queue_router
 from api.control import router as control_router
@@ -284,6 +285,7 @@ app.add_middleware(
 )
 
 app.include_router(channels_router, prefix="/api")
+app.include_router(tags_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
 app.include_router(queue_router, prefix="/api")
 app.include_router(control_router, prefix="/api")

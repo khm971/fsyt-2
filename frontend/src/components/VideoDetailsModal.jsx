@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import { cn, formatDateTime, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
 import {
@@ -36,9 +36,12 @@ import {
   HelpCircle,
   Play,
   CircleDot,
+  X,
 } from "lucide-react";
+import { DynamicIcon } from "lucide-react/dynamic";
 import { Tooltip } from "./Tooltip";
 import Modal from "./Modal";
+import { TagEditModal } from "./TagEditModal";
 
 const STATUS_LABELS = {
   available: "Available",
@@ -116,9 +119,18 @@ export function VideoDetailsModal({
   const [video, setVideo] = useState(null);
   const [channelName, setChannelName] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [technicalExpanded, setTechnicalExpanded] = useState(false);
+  const [technicalExpanded, setTechnicalExpanded] = useState(true);
+  const [tagsExpanded, setTagsExpanded] = useState(true);
+  const [videoTags, setVideoTags] = useState([]);
+  const [tagSearchQuery, setTagSearchQuery] = useState("");
+  const [tagSearchResults, setTagSearchResults] = useState([]);
+  const [contextMenu, setContextMenu] = useState(null);
+  const [tagToEdit, setTagToEdit] = useState(null);
+  const [tagActionLoading, setTagActionLoading] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const tagSearchDebounceRef = useRef(null);
+  const contextMenuRef = useRef(null);
 
   useEffect(() => {
     if (videoId == null) {
@@ -130,19 +142,21 @@ export function VideoDetailsModal({
     setLoading(true);
     setVideo(null);
     setChannelName(null);
-    api.videos
-      .get(videoId)
-      .then((v) => {
-        if (!cancelled) setVideo(v);
-        if (!cancelled && v?.channel_id != null) {
-          api.channels
-            .get(v.channel_id)
-            .then((ch) => {
-              if (!cancelled) setChannelName(ch?.title || ch?.handle || `Channel ${v.channel_id}`);
-            })
-            .catch(() => {});
-        }
-      })
+    Promise.all([
+      api.videos.get(videoId),
+      api.videos.getTags(videoId).catch(() => []),
+    ]).then(([v, tags]) => {
+      if (!cancelled) setVideo(v);
+      if (!cancelled) setVideoTags(Array.isArray(tags) ? tags : []);
+      if (!cancelled && v?.channel_id != null) {
+        api.channels
+          .get(v.channel_id)
+          .then((ch) => {
+            if (!cancelled) setChannelName(ch?.title || ch?.handle || `Channel ${v.channel_id}`);
+          })
+          .catch(() => {});
+      }
+    })
       .catch((e) => {
         if (!cancelled) setError(e.message);
       })
@@ -151,6 +165,42 @@ export function VideoDetailsModal({
       });
     return () => { cancelled = true; };
   }, [videoId, setError]);
+
+  // Debounced tag search for typeahead
+  useEffect(() => {
+    const q = (tagSearchQuery || "").trim();
+    if (!q) {
+      setTagSearchResults([]);
+      return;
+    }
+    if (tagSearchDebounceRef.current) clearTimeout(tagSearchDebounceRef.current);
+    tagSearchDebounceRef.current = setTimeout(() => {
+      api.tags.search(q).then((list) => {
+        const onVideo = new Set((videoTags || []).map((t) => t.tag_id));
+        setTagSearchResults(list.filter((t) => !onVideo.has(t.tag_id)));
+      }).catch(() => setTagSearchResults([]));
+    }, 250);
+    return () => {
+      if (tagSearchDebounceRef.current) clearTimeout(tagSearchDebounceRef.current);
+    };
+  }, [tagSearchQuery, videoTags]);
+
+  // Close context menu on outside click or Escape (ignore clicks inside the menu so Edit can fire)
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    const onDocClick = (e) => {
+      if (contextMenuRef.current && contextMenuRef.current.contains(e.target)) return;
+      close();
+    };
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
 
   const refreshVideo = useCallback(() => {
     if (videoId == null) return;
@@ -399,6 +449,166 @@ export function VideoDetailsModal({
                 <div className="mt-4 border-t border-gray-700 pt-3">
                   <button
                     type="button"
+                    onClick={() => setTagsExpanded((e) => !e)}
+                    className="flex items-center gap-2 w-full text-left text-gray-300 hover:text-white"
+                  >
+                    {tagsExpanded ? (
+                      <ChevronDown className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 shrink-0" />
+                    )}
+                    <span className="font-medium">Tags</span>
+                  </button>
+                  {tagsExpanded && (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        {videoTags.map((t) => (
+                          <span
+                            key={t.tag_id}
+                            role="button"
+                            tabIndex={0}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border border-gray-600 cursor-pointer select-none"
+                            style={{
+                              backgroundColor: t.bg_color || "#111827",
+                              color: t.fg_color || "#f3f4f6",
+                              borderColor: t.fg_color ? "rgba(255,255,255,0.2)" : undefined,
+                            }}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setContextMenu({ x: e.clientX, y: e.clientY, tag: t });
+                            }}
+                            onClick={() => {
+                              setTagToEdit(t);
+                              setContextMenu(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setTagToEdit(t);
+                                setContextMenu(null);
+                              }
+                            }}
+                          >
+                            {t.icon_before && (
+                              <DynamicIcon name={t.icon_before} className="w-4 h-4 shrink-0" />
+                            )}
+                            <span className="pointer-events-none">{t.title}</span>
+                            {t.icon_after && (
+                              <DynamicIcon name={t.icon_after} className="w-4 h-4 shrink-0" />
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTagActionLoading(true);
+                                api.videos
+                                  .removeTag(videoId, t.tag_id)
+                                  .then(() => {
+                                    setVideoTags((prev) => prev.filter((x) => x.tag_id !== t.tag_id));
+                                  })
+                                  .catch((err) => setError(err.message))
+                                  .finally(() => setTagActionLoading(false));
+                              }}
+                              className="ml-0.5 rounded hover:opacity-80 p-1 -m-1 cursor-pointer"
+                              aria-label="Remove tag"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={tagSearchQuery}
+                          onChange={(e) => setTagSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              const trimmed = (tagSearchQuery || "").trim();
+                              if (!trimmed) return;
+                              const existing = tagSearchResults.find(
+                                (r) => r.title.toLowerCase() === trimmed.toLowerCase()
+                              );
+                              if (existing) {
+                                setTagActionLoading(true);
+                                api.videos
+                                  .addTag(videoId, { tag_id: existing.tag_id })
+                                  .then((tags) => {
+                                    setVideoTags(tags);
+                                    setTagSearchQuery("");
+                                    setTagSearchResults([]);
+                                  })
+                                  .catch((err) => setError(err.message))
+                                  .finally(() => setTagActionLoading(false));
+                              } else {
+                                setTagActionLoading(true);
+                                api.videos
+                                  .addTag(videoId, { title: trimmed })
+                                  .then((tags) => {
+                                    setVideoTags(tags);
+                                    setTagSearchQuery("");
+                                    setTagSearchResults([]);
+                                  })
+                                  .catch((err) => setError(err.message))
+                                  .finally(() => setTagActionLoading(false));
+                              }
+                            }
+                          }}
+                          placeholder="Add tag (type to search, Enter to add or create)"
+                          className="input w-full"
+                          disabled={tagActionLoading}
+                        />
+                        {tagSearchResults.length > 0 && (
+                          <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-10">
+                            {tagSearchResults.map((t) => (
+                              <button
+                                key={t.tag_id}
+                                type="button"
+                                onClick={() => {
+                                  setTagActionLoading(true);
+                                  api.videos
+                                    .addTag(videoId, { tag_id: t.tag_id })
+                                    .then((tags) => {
+                                      setVideoTags(tags);
+                                      setTagSearchQuery("");
+                                      setTagSearchResults([]);
+                                    })
+                                    .catch((err) => setError(err.message))
+                                    .finally(() => setTagActionLoading(false));
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-gray-800 border-b border-gray-800 last:border-b-0"
+                                style={{
+                                  color: t.fg_color || "#f3f4f6",
+                                }}
+                              >
+                                {t.icon_before && (
+                                  <DynamicIcon name={t.icon_before} className="w-4 h-4 shrink-0" />
+                                )}
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-xs"
+                                  style={{
+                                    backgroundColor: t.bg_color || "#111827",
+                                    color: t.fg_color || "#f3f4f6",
+                                  }}
+                                >
+                                  {t.title}
+                                </span>
+                                {t.icon_after && (
+                                  <DynamicIcon name={t.icon_after} className="w-4 h-4 shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-4 border-t border-gray-700 pt-3">
+                  <button
+                    type="button"
                     onClick={() => setTechnicalExpanded((e) => !e)}
                     className="flex items-center gap-2 w-full text-left text-gray-300 hover:text-white"
                   >
@@ -542,6 +752,37 @@ export function VideoDetailsModal({
           <div className="text-gray-400 py-4 px-4">Video not found.</div>
         )}
       </div>
+
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-[60] min-w-[8rem] rounded-lg border border-gray-700 bg-gray-900 shadow-xl py-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setTagToEdit(contextMenu.tag);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+          >
+            Edit
+          </button>
+        </div>
+      )}
+
+      {tagToEdit && (
+        <TagEditModal
+          tag={tagToEdit}
+          videoId={videoId}
+          onClose={() => setTagToEdit(null)}
+          onSaved={() => {
+            api.videos.getTags(videoId).then(setVideoTags).catch(() => {});
+          }}
+        />
+      )}
 
       {confirmAction && (
         <Modal

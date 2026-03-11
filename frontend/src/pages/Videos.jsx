@@ -76,6 +76,8 @@ import { Tooltip } from "../components/Tooltip";
 import VideoPlayer from "../components/VideoPlayer";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
+import { VideoTagChips } from "../components/VideoTagChips";
+import { TagEditModal } from "../components/TagEditModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
 
 export default function Videos({ setError }) {
@@ -93,6 +95,8 @@ export default function Videos({ setError }) {
   const [playingVideo, setPlayingVideo] = useState(null);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
+  const [tagToEdit, setTagToEdit] = useState(null);
+  const [videoIdForTagEdit, setVideoIdForTagEdit] = useState(null);
   const [editingChannelId, setEditingChannelId] = useState(null);
   const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
 
@@ -106,6 +110,17 @@ export default function Videos({ setError }) {
       setError(e.message);
     }
   }, [channelFilter, sortBy, sortOrder, setError]);
+
+  const refreshVideoTags = useCallback((videoId) => {
+    api.videos
+      .getTags(videoId)
+      .then((tags) => {
+        setVideos((prev) =>
+          prev.map((v) => (v.video_id === videoId ? { ...v, tags } : v))
+        );
+      })
+      .catch(() => {});
+  }, []);
 
   const loadChannels = async () => {
     try {
@@ -135,7 +150,7 @@ export default function Videos({ setError }) {
   }, [videoUpdatedAt, loadVideos]);
 
   const openAdd = () => {
-    setAddForm({ provider_key: "", queue_download: true });
+    setAddForm({ provider_key: "", queue_download: true, tag_needs_review: true });
     setShowAdd(true);
   };
 
@@ -144,6 +159,7 @@ export default function Videos({ setError }) {
       const v = await api.videos.create({
         provider_key: addForm.provider_key,
         queue_download: addForm.queue_download,
+        tag_needs_review: addForm.tag_needs_review !== false,
       });
       setShowAdd(false);
       loadVideos();
@@ -218,7 +234,7 @@ export default function Videos({ setError }) {
               </th>
               <th className="px-4 py-3 font-medium">
                 <div className="flex items-center gap-1">
-                  Title / Provider key
+                  Title
                   <Tooltip title={sortBy === "title" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Title"}>
                     <button
                       type="button"
@@ -277,15 +293,25 @@ export default function Videos({ setError }) {
               <tr key={v.video_id} className="hover:bg-gray-800/30">
                 <td className="px-4 py-2 font-mono text-gray-300">{v.video_id}</td>
                 <td className="px-4 py-2">
-                  <Tooltip title="Video details" side="top" wrap>
-                    <button
-                      type="button"
-                      onClick={() => setVideoIdForDetails(v.video_id)}
-                      className="text-white hover:text-blue-400 text-left"
-                    >
-                      {v.title || v.provider_key || "—"}
-                    </button>
-                  </Tooltip>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Tooltip title="Video details" side="top" wrap>
+                      <button
+                        type="button"
+                        onClick={() => setVideoIdForDetails(v.video_id)}
+                        className="text-white hover:text-blue-400 text-left"
+                      >
+                        {v.title || v.provider_key || "—"}
+                      </button>
+                    </Tooltip>
+                    <VideoTagChips
+                      tags={v.tags || []}
+                      onTagClick={(tag) => {
+                        setTagToEdit(tag);
+                        setVideoIdForTagEdit(v.video_id);
+                      }}
+                      onMoreClick={() => setVideoIdForDetails(v.video_id)}
+                    />
+                  </div>
                 </td>
                 <td className="px-4 py-2 min-w-[140px]">
                   <div className="flex flex-col gap-0.5">
@@ -419,6 +445,15 @@ export default function Videos({ setError }) {
                 />
                 <span className="text-gray-400">Queue download</span>
               </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={addForm.tag_needs_review !== false}
+                  onChange={(e) => setAddForm({ ...addForm, tag_needs_review: e.target.checked })}
+                  className="rounded border-gray-600 bg-gray-800"
+                />
+                <span className="text-gray-400">Tag with Needs Review</span>
+              </label>
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button type="button" onClick={() => setShowAdd(false)} className="btn-secondary">
@@ -434,13 +469,30 @@ export default function Videos({ setError }) {
 
       <VideoDetailsModal
         videoId={videoIdForDetails}
-        onClose={() => setVideoIdForDetails(null)}
+        onClose={() => {
+          const vid = videoIdForDetails;
+          setVideoIdForDetails(null);
+          if (vid != null) refreshVideoTags(vid);
+        }}
         setError={setError}
         toast={toast}
         onVideoUpdated={loadVideos}
         onOpenJobDetails={(jobId) => setJobQueueIdForModal(jobId)}
         onOpenChannelEdit={(channelId) => setEditingChannelId(channelId)}
       />
+      {tagToEdit && (
+        <TagEditModal
+          tag={tagToEdit}
+          videoId={videoIdForTagEdit}
+          onClose={() => {
+            setTagToEdit(null);
+            setVideoIdForTagEdit(null);
+          }}
+          onSaved={() => {
+            if (videoIdForTagEdit != null) refreshVideoTags(videoIdForTagEdit);
+          }}
+        />
+      )}
       <ChannelEditModal
         channelId={editingChannelId}
         onClose={() => setEditingChannelId(null)}

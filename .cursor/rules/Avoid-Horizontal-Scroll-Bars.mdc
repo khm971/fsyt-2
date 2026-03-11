@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Unless specifically told otherwise, prevent horizontal scroll bars from appearing the GUI.
