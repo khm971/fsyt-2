@@ -28,7 +28,7 @@ export default function Dashboard({ setError }) {
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const queueRefreshTriggeredRef = useRef(false);
-  const { jobs, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshQueue } = useQueueWebSocket();
+  const { jobs, queueSummary, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshSummary } = useQueueWebSocket();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -91,18 +91,22 @@ export default function Dashboard({ setError }) {
 
   const heartbeat = serverHeartbeat ?? control.server_heartbeat?.value;
   const heartbeatAgeMs = heartbeat != null ? now.getTime() - new Date(heartbeat).getTime() : null;
-  const heartbeatCurrent = heartbeatAgeMs != null && heartbeatAgeMs <= 30_000;
-  const heartbeatStale = heartbeatAgeMs != null && heartbeatAgeMs > 30_000 && heartbeatAgeMs <= 5 * 60 * 1000;
-  const heartbeatOld = heartbeatAgeMs != null && heartbeatAgeMs > 5 * 60 * 1000;
+  const oneMinuteMs = 60 * 1000;
+  const fiveMinutesMs = 5 * 60 * 1000;
+  const heartbeatCurrent = heartbeatAgeMs != null && heartbeatAgeMs <= oneMinuteMs;
+  const heartbeatStale = heartbeatAgeMs != null && heartbeatAgeMs > oneMinuteMs && heartbeatAgeMs <= fiveMinutesMs;
+  const heartbeatOld = heartbeatAgeMs != null && heartbeatAgeMs > fiveMinutesMs;
   const queuePaused =
     queuePausedFromServer !== undefined
       ? queuePausedFromServer
       : control.queue_paused?.value === "true";
   const chargeableErrorsLockout = control.chargeable_errors_lockout?.value === "true";
-  const running = jobs.filter((j) => j.status === "running");
-  const queued = jobs.filter((j) => j.status === "new");
-  const errors = jobs.filter((j) => j.error_flag && !j.acknowledge_flag);
-  const warnings = jobs.filter((j) => j.warning_flag && !j.acknowledge_flag);
+  const isJobInProgress = (j) => j.status != null && j.status !== "new" && j.status !== "done" && j.status !== "cancelled";
+  const runningCount = queueSummary?.running_count ?? jobs.filter(isJobInProgress).length;
+  const running = queueSummary?.running?.length ? queueSummary.running : jobs.filter(isJobInProgress);
+  const queuedCount = queueSummary?.queued_count ?? jobs.filter((j) => j.status === "new").length;
+  const errorsCount = queueSummary?.errors_count ?? jobs.filter((j) => j.error_flag && !j.acknowledge_flag).length;
+  const warningsCount = queueSummary?.warnings_count ?? jobs.filter((j) => j.warning_flag && !j.acknowledge_flag).length;
   const futureScheduled = jobs.filter(
     (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
   );
@@ -120,11 +124,11 @@ export default function Dashboard({ setError }) {
       ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfter)
       : null;
   useEffect(() => {
-    if (jobs.length === 0 && refreshQueue && !queueRefreshTriggeredRef.current) {
+    if (queueSummary == null && refreshSummary && !queueRefreshTriggeredRef.current) {
       queueRefreshTriggeredRef.current = true;
-      refreshQueue();
+      refreshSummary();
     }
-  }, [jobs.length, refreshQueue]);
+  }, [queueSummary, refreshSummary]);
   const lastScheduledJob =
     jobsWithRunAfter.length > 0 && lastScheduledRunAfter != null
       ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfter)
@@ -160,46 +164,46 @@ export default function Dashboard({ setError }) {
           </Link>
           <div className="text-white text-sm space-y-1.5">
             <div className="flex items-center gap-3 flex-wrap">
-              {running.length > 0 ? (
+              {runningCount > 0 ? (
                 <Tooltip
                   title={
-                    running[0].status_percent_complete != null
+                    running[0]?.status_percent_complete != null
                       ? `${running[0].job_type} (${running[0].status_percent_complete}%)`
-                      : running[0].job_type
+                      : running[0]?.job_type
                   }
                   side="top"
                 >
                   <button
                     type="button"
-                    onClick={() => setJobQueueIdForModal(running[0].job_queue_id)}
+                    onClick={() => setJobQueueIdForModal(running[0]?.job_queue_id)}
                     className="flex items-center gap-1.5 text-green-400 hover:text-green-300 text-left"
                   >
                     <PlayCircle className="w-3.5 h-3.5" />
-                    {running.length} running
+                    {runningCount} running
                   </button>
                 </Tooltip>
               ) : (
                 <span className="flex items-center gap-1.5 text-gray-300">
                   <PlayCircle className="w-3.5 h-3.5" />
-                  {running.length} running
+                  {runningCount} running
                 </span>
               )}
-              {queued.length > 0 ? (
+              {queuedCount > 0 ? (
                 <Link
                   to="/queue?filter=queued"
                   className="flex items-center gap-1.5 text-gray-300 hover:text-white"
                 >
                   <Clock className="w-3.5 h-3.5" />
-                  {queued.length} queued
+                  {queuedCount} queued
                 </Link>
               ) : (
                 <span className="flex items-center gap-1.5 text-gray-300">
                   <Clock className="w-3.5 h-3.5" />
-                  {queued.length} queued
+                  {queuedCount} queued
                 </span>
               )}
             </div>
-            {running.length > 0 && (() => {
+            {runningCount > 0 && running[0] && (() => {
               const job = running[0];
               const percent =
                 job.video_id != null && videoProgressOverrides[job.video_id]?.status_percent_complete != null
@@ -216,24 +220,24 @@ export default function Dashboard({ setError }) {
                 </div>
               ) : null;
             })()}
-            {(errors.length > 0 || warnings.length > 0) && (
+            {(errorsCount > 0 || warningsCount > 0) && (
               <div className="flex items-center gap-2 flex-wrap">
-                {errors.length > 0 && (
+                {errorsCount > 0 && (
                   <Link
                     to="/queue?filter=warnings_and_errors"
                     className="flex items-center gap-1.5 text-red-400 hover:text-red-300"
                   >
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    {errors.length} error{errors.length !== 1 ? "s" : ""}
+                    {errorsCount} error{errorsCount !== 1 ? "s" : ""}
                   </Link>
                 )}
-                {warnings.length > 0 && (
+                {warningsCount > 0 && (
                   <Link
                     to="/queue?filter=warnings_and_errors"
                     className="flex items-center gap-1.5 text-yellow-400 hover:text-yellow-300"
                   >
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    {warnings.length} warning{warnings.length !== 1 ? "s" : ""}
+                    {warningsCount} warning{warningsCount !== 1 ? "s" : ""}
                   </Link>
                 )}
               </div>

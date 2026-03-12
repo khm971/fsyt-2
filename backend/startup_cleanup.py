@@ -35,6 +35,32 @@ async def run_startup_cleanup() -> None:
             job_id=job_id,
         )
 
+    # 1a. Job queue: reset status_percent_complete to 0 for jobs with percent 1–99 only (leave 0% and 100% unchanged)
+    percent_rows = await db.fetch(
+        """SELECT job_queue_id, job_type, video_id, channel_id, status, status_percent_complete, status_message
+           FROM job_queue WHERE status_percent_complete BETWEEN 1 AND 99"""
+    )
+    for r in percent_rows:
+        job_id = r["job_queue_id"]
+        await db.execute(
+            """UPDATE job_queue SET status_percent_complete = 0 WHERE job_queue_id = $1""",
+            job_id,
+        )
+        detail = (
+            f"job_queue_id={job_id} job_type={r['job_type']!r} status={r['status']!r} "
+            f"video_id={r.get('video_id')} channel_id={r.get('channel_id')} "
+            f"previous status_percent_complete={r['status_percent_complete']}"
+        )
+        await log_event(
+            f"Startup cleanup: reset status_percent_complete to 0 (was 1–99%, no job in progress at startup) ({detail})",
+            SEVERITY_WARNING,
+            job_id=job_id,
+            video_id=r.get("video_id"),
+            channel_id=r.get("channel_id"),
+        )
+    if percent_rows:
+        await broadcast_queue_update()
+
     # 1b. Job queue: cancel jobs whose run_after is more than one minute in the past
     missed_count = await db_helpers.cancel_missed_future_jobs(
         "Job cancelled during startup because the run after time has been missed"

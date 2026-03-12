@@ -3,6 +3,7 @@ import os
 import shutil
 import requests
 from services.ytdlp_service import get_video_info
+from services.ytdl_logger import make_ytdl_logger
 import video_progress_bridge
 from services.llm_service import generate_llm_video_description
 from services.nfo_service import create_video_nfo_2
@@ -39,7 +40,7 @@ def download_video_sync(
         print(f"[Download] video_id={video_id} provider_key={provider_key}: getting metadata ...", flush=True)
         sync_db.update_video_download_progress_sync(video_id, "get_metadata_for_download", 0, job_id=job_id)
         video_progress_bridge.put_progress(video_id, "get_metadata_for_download", 0)
-        info, err = get_video_info(provider_key)
+        info, err = get_video_info(provider_key, job_id=job_id, video_id=video_id, channel_id=channel_id)
         if not info:
             sync_db.update_video_download_progress_sync(video_id, "error_getting_metadata", 0, err, job_id=job_id)
             _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: failed to get metadata — {err}", sync_db.SEVERITY_ERROR)
@@ -97,6 +98,7 @@ def download_video_sync(
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [progress_hook],
+            "logger": make_ytdl_logger(job_id=job_id, video_id=video_id, channel_id=channel_id),
         }
         _log(job_id, video_id, channel_id, f"{prefix}video {video_id}: downloading started")
         print(f"[Download] video_id={video_id}: downloading — 0%", flush=True)

@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from database import db
-from api.schemas import JobQueueCreate, JobQueueListResponse, JobQueueResponse, JobQueueUpdate
+from api.schemas import JobQueueCreate, JobQueueListResponse, JobQueueResponse, JobQueueSummaryResponse, JobQueueUpdate
 from job_processor import broadcast_queue_update
 from log_helper import log_event, SEVERITY_INFO
 
@@ -67,6 +67,37 @@ async def list_jobs(
     return JobQueueListResponse(items=[row_to_job(r) for r in rows], total=total)
 
 
+@router.get("/summary", response_model=JobQueueSummaryResponse)
+async def get_queue_summary():
+    """Lightweight summary for the Dashboard jobs widget: in-progress jobs (with progress) and counts only."""
+    counts_row = await db.fetchrow(
+        """SELECT
+             count(*) FILTER (WHERE status != 'new' AND status != 'done' AND status != 'cancelled') AS running_count,
+             count(*) FILTER (WHERE status = 'new') AS queued_count,
+             count(*) AS total_count,
+             count(*) FILTER (WHERE error_flag AND NOT acknowledge_flag) AS errors_count,
+             count(*) FILTER (WHERE warning_flag AND NOT acknowledge_flag) AS warnings_count
+           FROM job_queue"""
+    )
+    running_rows = await db.fetch(
+        """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                  parameter, extended_parameters, status, status_percent_complete, status_message,
+                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                  run_after, priority, scheduler_entry_id
+           FROM job_queue
+           WHERE status != 'new' AND status != 'done' AND status != 'cancelled'
+           ORDER BY last_update DESC NULLS LAST LIMIT 20"""
+    )
+    return JobQueueSummaryResponse(
+        running=[row_to_job(r) for r in running_rows],
+        running_count=int(counts_row["running_count"] or 0),
+        queued_count=int(counts_row["queued_count"] or 0),
+        total_count=int(counts_row["total_count"] or 0),
+        errors_count=int(counts_row["errors_count"] or 0),
+        warnings_count=int(counts_row["warnings_count"] or 0),
+    )
+
+
 @router.get("/{job_id}", response_model=JobQueueResponse)
 async def get_job(job_id: int):
     r = await db.fetchrow(
@@ -84,6 +115,15 @@ async def get_job(job_id: int):
 
 @router.post("", response_model=JobQueueResponse, status_code=201)
 async def create_job(body: JobQueueCreate):
+    if body.job_type == "trim_job_queue":
+        if not body.parameter or not body.parameter.strip():
+            raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
+        try:
+            age_days = int(body.parameter.strip())
+        except ValueError:
+            raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
+        if age_days < 3:
+            raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
     row = await db.fetchrow(
         """INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,

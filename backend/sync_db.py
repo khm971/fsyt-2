@@ -83,6 +83,7 @@ def update_video_download_info_sync(video_id: int, file_path: str, duration: int
 
 
 # Severity constants (match log_helper)
+SEVERITY_LOW_LEVEL = 5
 SEVERITY_DEBUG = 10
 SEVERITY_INFO = 20
 SEVERITY_WARNING = 30
@@ -96,15 +97,16 @@ def log_event_sync(
     job_id: int | None = None,
     video_id: int | None = None,
     channel_id: int | None = None,
+    subsystem: str | None = None,
 ) -> None:
     """Write an event to the event_log table from sync/thread code."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname)
-                       VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
-                    ((message or "")[:4096], severity, job_id, video_id, channel_id),
+                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem)
+                       VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s)""",
+                    ((message or "")[:4096], severity, job_id, video_id, channel_id, subsystem),
                 )
     except Exception:
         pass  # Don't let logging failures break the app

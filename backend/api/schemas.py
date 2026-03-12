@@ -173,6 +173,15 @@ class JobQueueListResponse(BaseModel):
     total: int
 
 
+class JobQueueSummaryResponse(BaseModel):
+    running: list[JobQueueResponse]
+    running_count: int
+    queued_count: int
+    total_count: int
+    errors_count: int
+    warnings_count: int
+
+
 # ----- Scheduler entry -----
 class SchedulerEntryBase(BaseModel):
     name: str

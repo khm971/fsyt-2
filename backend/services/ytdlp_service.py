@@ -3,14 +3,25 @@ import os
 from datetime import datetime
 import yt_dlp
 from services.tools import get_media_root, sanitize_string_for_disk_path
+from services.ytdl_logger import make_ytdl_logger
 
 
-def get_video_info(provider_key: str, quiet: bool = True):
+def get_video_info(
+    provider_key: str,
+    quiet: bool = True,
+    job_id: int | None = None,
+    video_id: int | None = None,
+    channel_id: int | None = None,
+):
     """
     Returns (info_dict, error_message). info_dict is None on failure.
     """
     video_url = f"https://www.youtube.com/watch?v={provider_key}"
-    ydl_opts = {"quiet": quiet, "no_warnings": quiet}
+    ydl_opts = {
+        "quiet": quiet,
+        "no_warnings": quiet,
+        "logger": make_ytdl_logger(job_id=job_id, video_id=video_id, channel_id=channel_id),
+    }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
@@ -38,7 +49,14 @@ def get_video_info(provider_key: str, quiet: bool = True):
         return None, str(e)
 
 
-def get_channel_videos(channel_handle: str, start: int = 1, end: int = 10, quiet: bool = True):
+def get_channel_videos(
+    channel_handle: str,
+    start: int = 1,
+    end: int = 10,
+    quiet: bool = True,
+    job_id: int | None = None,
+    channel_id: int | None = None,
+):
     """
     Returns (entries_list, error). entries_list is list of dicts with id, title, upload_date, duration; or None on failure.
     """
@@ -54,6 +72,7 @@ def get_channel_videos(channel_handle: str, start: int = 1, end: int = 10, quiet
         "ignoreerrors": True,
         "playlist_items": f"{start}-{end}",
         "no_warnings": True,
+        "logger": make_ytdl_logger(job_id=job_id, video_id=None, channel_id=channel_id),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

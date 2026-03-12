@@ -20,6 +20,7 @@ const JOB_TYPES = [
   "add_video_from_frontend",
   "add_video_from_playlist",
   "transcode_video_for_ipad",
+  "trim_job_queue",
 ];
 
 function jobTypeNeedsVideoId(jobType) {
@@ -40,6 +41,7 @@ function jobTypeNeedsParameter(jobType) {
     "download_one_channel",
     "add_video_from_frontend",
     "add_video_from_playlist",
+    "trim_job_queue",
   ].includes(jobType);
 }
 
@@ -132,6 +134,13 @@ export default function JobScheduler({ setError }) {
     if (!form.name.trim()) {
       toast.addToast("Name is required", "error");
       return;
+    }
+    if (form.job_type === "trim_job_queue") {
+      const age = parseInt(form.parameter, 10);
+      if (Number.isNaN(age) || age < 3) {
+        toast.addToast("Age (days) must be at least 3", "error");
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -394,14 +403,17 @@ export default function JobScheduler({ setError }) {
                 <span className="text-gray-400 block mb-1">
                   {["add_video_from_frontend", "add_video_from_playlist"].includes(form.job_type)
                     ? "YouTube URL or video ID"
-                    : "Parameter"}
+                    : form.job_type === "trim_job_queue"
+                      ? "Age (days)"
+                      : "Parameter"}
                 </span>
                 <input
-                  type="text"
+                  type={form.job_type === "trim_job_queue" ? "number" : "text"}
+                  min={form.job_type === "trim_job_queue" ? 3 : undefined}
                   value={form.parameter}
                   onChange={(e) => setForm({ ...form, parameter: e.target.value })}
                   className="input w-full"
-                  placeholder={form.job_type === "fill_missing_metadata" ? "Max videos (optional)" : ""}
+                  placeholder={form.job_type === "fill_missing_metadata" ? "Max videos (optional)" : form.job_type === "trim_job_queue" ? "e.g. 7" : ""}
                 />
               </label>
             )}

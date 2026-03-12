@@ -118,14 +118,21 @@ export default function Log({ setError }) {
                     {e.channel_id ?? "—"}
                   </td>
                   <td className="px-4 py-2">
-                    <span className={cn(SEVERITY_COLORS[e.severity] ?? "text-gray-300")}>
-                      {e.severity === 5 && "Low"}
-                      {e.severity === 10 && "Debug"}
-                      {e.severity === 20 && "Info"}
-                      {e.severity === 25 && "Notice"}
-                      {e.severity === 30 && "Warning"}
-                      {e.severity === 40 && "Error"}
-                      {e.severity === 50 && "Critical"}
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <span className={cn(SEVERITY_COLORS[e.severity] ?? "text-gray-300")}>
+                        {e.severity === 5 && "Low"}
+                        {e.severity === 10 && "Debug"}
+                        {e.severity === 20 && "Info"}
+                        {e.severity === 25 && "Notice"}
+                        {e.severity === 30 && "Warning"}
+                        {e.severity === 40 && "Error"}
+                        {e.severity === 50 && "Critical"}
+                      </span>
+                      {e.subsystem && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-700 text-gray-300">
+                          {e.subsystem}
+                        </span>
+                      )}
                     </span>
                   </td>
                   <td

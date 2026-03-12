@@ -144,6 +144,7 @@ async def run_job_loop() -> None:
                                 ch.get("folder_on_disk") or "",
                                 ch.get("title") or "channel",
                                 True,
+                                row["channel_id"],
                             )
                             if not ok:
                                 success, message, is_warning = False, err or "Artwork download failed", True
@@ -210,6 +211,44 @@ async def run_job_loop() -> None:
                     success = True
                     message = f"Queued {count} download_video jobs"
 
+                elif job_type == "trim_job_queue":
+                    try:
+                        age_days = int(row.get("parameter") or "0")
+                    except (TypeError, ValueError):
+                        age_days = 0
+                    if age_days < 3:
+                        success, message, is_error = False, "parameter (age in days) is required and must be at least 3", True
+                    else:
+                        cutoff = datetime.now() - timedelta(days=age_days)
+                        ids_row = await db.fetch(
+                            """SELECT job_queue_id FROM job_queue
+                               WHERE status IN ('cancelled', 'done')
+                                 AND record_created < $1
+                                 AND ((warning_flag = FALSE AND acknowledge_flag = FALSE) OR acknowledge_flag = TRUE)""",
+                            cutoff,
+                        )
+                        ids_to_delete = [r["job_queue_id"] for r in ids_row]
+                        if ids_to_delete:
+                            await db.execute(
+                                "UPDATE event_log SET job_id = NULL WHERE job_id = ANY($1::int[])",
+                                ids_to_delete,
+                            )
+                            await db.execute(
+                                "DELETE FROM job_queue WHERE job_queue_id = ANY($1::int[])",
+                                ids_to_delete,
+                            )
+                            deleted_count = len(ids_to_delete)
+                            await log_event(
+                                f"Trimmed job queue: deleted {deleted_count} record(s) older than {age_days} days",
+                                SEVERITY_INFO,
+                                job_id=job_id,
+                            )
+                            success = True
+                            message = f"Trimmed {deleted_count} job(s) older than {age_days} days"
+                        else:
+                            success = True
+                            message = f"No jobs to trim (older than {age_days} days)"
+
                 else:
                     success, message, is_error = False, f"Unknown job type: {job_type}", True
             except Exception as e:
@@ -267,7 +306,9 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
     await db_helpers.update_video_download_progress(video_id, "getting_metadata", 0)
     if job_id is not None:
         await db_helpers.update_job_status(job_id, "getting_metadata", None, 0)
-    info, err = await asyncio.to_thread(get_video_info, v["provider_key"])
+    info, err = await asyncio.to_thread(
+        lambda: get_video_info(v["provider_key"], job_id=job_id, video_id=video_id, channel_id=channel_id),
+    )
     if not info:
         await db_helpers.update_video_download_progress(video_id, "error_getting_metadata", 0, err)
         if job_id is not None:
@@ -375,7 +416,9 @@ async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: in
     handle = ch.get("handle") or ch.get("provider_key") or ""
     if not handle:
         return "Channel has no handle or provider_key"
-    entries, err = await asyncio.to_thread(get_channel_videos, handle, 1, max_videos)
+    entries, err = await asyncio.to_thread(
+        lambda: get_channel_videos(handle, 1, max_videos, job_id=job_id, channel_id=channel_id),
+    )
     if err:
         return err
     if not entries:
@@ -411,9 +454,13 @@ async def _run_update_channel_info(channel_id: int) -> bool:
     if not ch:
         return False
     if ch.get("provider_key"):
-        info, err = await asyncio.to_thread(get_channel_info_by_yt_channel_id, ch["provider_key"])
+        info, err = await asyncio.to_thread(
+            lambda: get_channel_info_by_yt_channel_id(ch["provider_key"], channel_id=channel_id),
+        )
     elif ch.get("handle"):
-        info, err = await asyncio.to_thread(get_channel_info_by_name, ch["handle"])
+        info, err = await asyncio.to_thread(
+            lambda: get_channel_info_by_name(ch["handle"], channel_id=channel_id),
+        )
     else:
         return False
     if not info:

@@ -5,13 +5,19 @@ from services.tools import get_media_root
 from services.channel_info_service import get_channel_info_by_yt_channel_id
 
 
-def download_channel_artwork(provider_key: str, folder_on_disk: str, title: str, redownload_if_exists: bool = False):
+def download_channel_artwork(
+    provider_key: str,
+    folder_on_disk: str,
+    title: str,
+    redownload_if_exists: bool = False,
+    channel_id: int | None = None,
+):
     """
     Downloads channel artwork. folder_on_disk is the channel folder name under media root.
     Returns (True, None) on success, (False, error_message) on failure.
     """
     try:
-        details, err = get_channel_info_by_yt_channel_id(provider_key)
+        details, err = get_channel_info_by_yt_channel_id(provider_key, channel_id=channel_id)
         if not details:
             return False, err or "get_channel_info returned None"
         root = get_media_root()

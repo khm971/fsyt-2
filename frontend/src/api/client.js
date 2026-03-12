@@ -102,6 +102,7 @@ export const api = {
   },
 
   queue: {
+    summary: () => apiFetch("/queue/summary"),
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.status) q.set("status", params.status);

@@ -4,11 +4,32 @@ import { getWsUrl, api } from "../api/client";
 const RECONNECT_INTERVAL_MS = 5000;
 const INITIAL_QUEUE_LIMIT = 500;
 
+function isInProgress(status) {
+  return status != null && status !== "new" && status !== "done" && status !== "cancelled";
+}
+
+function summaryFromJobs(jobsList) {
+  const list = jobsList || [];
+  const running = list.filter((j) => isInProgress(j.status));
+  const queued = list.filter((j) => j.status === "new");
+  const errors = list.filter((j) => j.error_flag && !j.acknowledge_flag);
+  const warnings = list.filter((j) => j.warning_flag && !j.acknowledge_flag);
+  return {
+    running,
+    running_count: running.length,
+    queued_count: queued.length,
+    total_count: list.length,
+    errors_count: errors.length,
+    warnings_count: warnings.length,
+  };
+}
+
 const QueueWebSocketContext = createContext(null);
 
 export function QueueWebSocketProvider({ children }) {
   const [jobs, setJobs] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [queueSummary, setQueueSummary] = useState(null);
   const [status, setStatus] = useState("connecting");
   const [videoUpdatedAt, setVideoUpdatedAt] = useState(0);
   const [queueUpdatedAt, setQueueUpdatedAt] = useState(0);
@@ -66,6 +87,9 @@ export function QueueWebSocketProvider({ children }) {
             setJobs(msg.jobs);
             setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
           }
+          const summary = summaryFromJobs(msg.jobs);
+          if (typeof msg.total_count === "number") summary.total_count = msg.total_count;
+          setQueueSummary(summary);
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
           if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
@@ -127,6 +151,27 @@ export function QueueWebSocketProvider({ children }) {
           jobsRef.current = res.items;
           setJobs(res.items);
           setTotalCount(typeof res.total === "number" ? res.total : res.items.length);
+          setQueueSummary(summaryFromJobs(res.items));
+          setQueueUpdatedAt(Date.now());
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const refreshSummary = useCallback(() => {
+    api.queue
+      .summary()
+      .then((res) => {
+        if (res) {
+          setQueueSummary({
+            running: res.running ?? [],
+            running_count: res.running_count ?? 0,
+            queued_count: res.queued_count ?? 0,
+            total_count: res.total_count ?? 0,
+            errors_count: res.errors_count ?? 0,
+            warnings_count: res.warnings_count ?? 0,
+          });
+          setTotalCount(res.total_count ?? 0);
           setQueueUpdatedAt(Date.now());
         }
       })
@@ -134,12 +179,13 @@ export function QueueWebSocketProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    refreshQueue();
-  }, [refreshQueue]);
+    refreshSummary();
+  }, [refreshSummary]);
 
   const value = {
     jobs,
     totalCount,
+    queueSummary,
     status,
     videoUpdatedAt,
     queueUpdatedAt,
@@ -154,6 +200,7 @@ export function QueueWebSocketProvider({ children }) {
     queuePausedFromServer,
     send,
     refreshQueue,
+    refreshSummary,
   };
 
   return (

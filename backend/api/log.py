@@ -17,6 +17,7 @@ def row_to_log(r):
         "job_id": r.get("job_id"),
         "video_id": r.get("video_id"),
         "channel_id": r.get("channel_id"),
+        "subsystem": r.get("subsystem"),
     }
 
 
@@ -42,7 +43,7 @@ async def list_log(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.extend([limit, offset])
     rows = await db.fetch(
-        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id
+        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id, subsystem
             FROM event_log
             {where}
             ORDER BY event_time DESC
@@ -83,7 +84,7 @@ async def recent_log(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     rows = await db.fetch(
-        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id
+        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id, subsystem
             FROM event_log
             {where}
             ORDER BY event_time DESC

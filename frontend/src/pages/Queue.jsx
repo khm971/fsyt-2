@@ -17,10 +17,10 @@ export default function Queue({ setError }) {
   const filterQueued = searchParams.get("filter") === "queued";
   const filterScheduled = searchParams.get("filter") === "scheduled";
   const PAGE_SIZE = 500;
-  const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides } = useQueueWebSocket();
+  const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides, refreshQueue } = useQueueWebSocket();
   const [control, setControl] = useState({});
   const [paused, setPaused] = useState(false);
-  const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", priority: 50 });
+  const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", parameter: "", priority: 50 });
   const [showAdd, setShowAdd] = useState(false);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
@@ -34,6 +34,10 @@ export default function Queue({ setError }) {
 
   const displayJobs = page === 1 ? jobs : pageJobs;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  useEffect(() => {
+    if (page === 1 && jobs.length === 0 && totalCount > 0 && refreshQueue) refreshQueue();
+  }, [page, jobs.length, totalCount, refreshQueue]);
 
   useEffect(() => {
     if (page <= 1) return;
@@ -182,11 +186,19 @@ export default function Queue({ setError }) {
 
   const addJob = async () => {
     try {
+      if (addForm.job_type === "trim_job_queue") {
+        const age = parseInt(addForm.parameter, 10);
+        if (Number.isNaN(age) || age < 3) {
+          toast.addToast("Age (days) must be at least 3", "error");
+          return;
+        }
+      }
       const body = {
         job_type: addForm.job_type,
         priority: addForm.priority,
       };
       if (addForm.video_id) body.video_id = parseInt(addForm.video_id, 10);
+      if (addForm.job_type === "trim_job_queue") body.parameter = String(addForm.parameter).trim();
       const j = await api.queue.create(body);
       setShowAdd(false);
       const extra = [];
@@ -688,8 +700,22 @@ export default function Queue({ setError }) {
                   <option value="download_one_channel">download_one_channel</option>
                   <option value="download_auto_enabled_channels">download_auto_enabled_channels</option>
                   <option value="update_channel_info">update_channel_info</option>
+                  <option value="trim_job_queue">trim_job_queue</option>
                 </select>
               </label>
+              {addForm.job_type === "trim_job_queue" && (
+                <label className="block">
+                  <span className="text-gray-400 block mb-1">Age (days)</span>
+                  <input
+                    type="number"
+                    min={3}
+                    value={addForm.parameter}
+                    onChange={(e) => setAddForm({ ...addForm, parameter: e.target.value })}
+                    className="input"
+                    placeholder="e.g. 7"
+                  />
+                </label>
+              )}
               <label className="block">
                 <span className="text-gray-400 block mb-1">Video ID (optional)</span>
                 <input

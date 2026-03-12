@@ -18,13 +18,14 @@ async def log_event(
     job_id: int | None = None,
     video_id: int | None = None,
     channel_id: int | None = None,
+    subsystem: str | None = None,
 ) -> None:
     """Write an event to the event_log table."""
     try:
         instance_id, hostname = get_backend_instance()
         await db.execute(
-            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
             (message or "")[:4096],
             severity,
             job_id,
@@ -32,6 +33,7 @@ async def log_event(
             channel_id,
             instance_id,
             hostname or None,
+            subsystem,
         )
         if severity >= SEVERITY_INFO:
             try:
