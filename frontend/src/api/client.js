@@ -67,6 +67,14 @@ export const api = {
       const query = q.toString();
       return apiFetch(`/videos/by-tags${query ? `?${query}` : ""}`);
     },
+    search: (params = {}) => {
+      const q = new URLSearchParams();
+      if (params.q != null && params.q !== "") q.set("q", params.q);
+      if (params.include_unavailable != null) q.set("include_unavailable", params.include_unavailable);
+      if (params.limit != null) q.set("limit", params.limit);
+      const query = q.toString();
+      return apiFetch(`/videos/search${query ? `?${query}` : ""}`);
+    },
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.channel_id != null) q.set("channel_id", params.channel_id);
@@ -128,6 +136,10 @@ export const api = {
 
   status: {
     get: () => apiFetch("/status"),
+  },
+
+  information: {
+    get: () => apiFetch("/information"),
   },
 
   scheduler: {

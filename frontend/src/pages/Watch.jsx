@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import { cn, formatDurationSeconds } from "../lib/utils";
-import { Play, Film, X } from "lucide-react";
+import { Play, Film, X, Search } from "lucide-react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
@@ -28,11 +28,20 @@ export default function Watch({ setError }) {
   const [tagSearchQuery, setTagSearchQuery] = useState("");
   const [tagSearchResults, setTagSearchResults] = useState([]);
   const tagSearchDebounceRef = useRef(null);
+  const [freeFormSearchInput, setFreeFormSearchInput] = useState("");
+  const [freeFormTerms, setFreeFormTerms] = useState([]);
+  const [includeUnavailableInSearch, setIncludeUnavailableInSearch] = useState(false);
   const { videoUpdatedAt } = useQueueWebSocket();
 
   const loadVideos = useCallback(async () => {
     try {
-      if (selectedTags.length === 0) {
+      if (freeFormTerms.length > 0) {
+        const list = await api.videos.search({
+          q: freeFormTerms.join(","),
+          include_unavailable: includeUnavailableInSearch,
+        });
+        setVideos(list);
+      } else if (selectedTags.length === 0) {
         const list = await api.videos.watchList();
         setVideos(list);
       } else {
@@ -45,7 +54,7 @@ export default function Watch({ setError }) {
     } catch (e) {
       setError(e.message);
     }
-  }, [setError, selectedTags, tagMatchMode]);
+  }, [setError, freeFormTerms, includeUnavailableInSearch, selectedTags, tagMatchMode]);
 
   const refreshVideoTags = useCallback((videoId) => {
     api.videos
@@ -89,13 +98,26 @@ export default function Watch({ setError }) {
     };
   }, [tagSearchQuery, selectedTags]);
 
+  const isFreeFormSearchMode = freeFormTerms.length > 0;
   const isByTagsMode = selectedTags.length >= 1;
-  const subtitle = isByTagsMode
-    ? `Videos matching ${tagMatchMode === "all" ? "all" : "any"} tags.`
-    : "Videos you've started but not finished, most recent first.";
-  const emptyMessage = isByTagsMode
-    ? "No videos match the selected tags."
-    : "No videos in progress.";
+  const subtitle = isFreeFormSearchMode
+    ? `Videos where all terms appear in title or description.`
+    : isByTagsMode
+      ? `Videos matching ${tagMatchMode === "all" ? "all" : "any"} tags.`
+      : "Videos you've started but not finished, most recent first.";
+  const emptyMessage = isFreeFormSearchMode
+    ? "No videos match your search terms. Try different or fewer terms."
+    : isByTagsMode
+      ? "No videos match the selected tags."
+      : "No videos in progress.";
+
+  const runFreeFormSearch = useCallback(() => {
+    const terms = (freeFormSearchInput || "")
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    setFreeFormTerms(terms);
+  }, [freeFormSearchInput]);
 
   if (loading) return <div className="text-gray-400 py-8">Loading...</div>;
 
@@ -106,6 +128,52 @@ export default function Watch({ setError }) {
       {/* Search section */}
       <div className="rounded-lg border border-gray-800 bg-gray-900/80 p-4 space-y-3">
         <h3 className="text-sm font-medium text-gray-300">Search</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={freeFormSearchInput}
+            onChange={(e) => setFreeFormSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                runFreeFormSearch();
+              }
+            }}
+            placeholder="Search by title or description (e.g. Bob, Sam, Joe)"
+            className="input flex-1 min-w-[200px]"
+          />
+          <button
+            type="button"
+            onClick={runFreeFormSearch}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Search className="w-4 h-4" />
+            Search
+          </button>
+          {isFreeFormSearchMode && (
+            <button
+              type="button"
+              onClick={() => {
+                setFreeFormTerms([]);
+                setFreeFormSearchInput("");
+              }}
+              className="btn-secondary text-sm"
+            >
+              Clear search
+            </button>
+          )}
+          {isFreeFormSearchMode && (
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeUnavailableInSearch}
+                onChange={(e) => setIncludeUnavailableInSearch(e.target.checked)}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500"
+              />
+              <span>Include videos that are not yet available</span>
+            </label>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {selectedTags.map((t) => (
             <span
@@ -222,6 +290,8 @@ export default function Watch({ setError }) {
 
       <p className="text-gray-400 text-sm">{subtitle}</p>
 
+      <p className="text-gray-400 text-sm">{videos.length === 1 ? "1 video found" : `${videos.length} videos found`}</p>
+
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/80 text-gray-400">
@@ -268,30 +338,31 @@ export default function Watch({ setError }) {
                 <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(v.duration)}</td>
                 <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(v.watch_progress_seconds)}</td>
                 <td className="px-4 py-2">
-                  <Tooltip title={
-                    v.watch_is_finished ? "Play (finished)" :
-                    (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95)
-                      ? `Play (in progress, ${Math.round(v.watch_progress_percent)}%)`
-                      : "Play"
-                  }>
-                    <button
-                      type="button"
-                      onClick={() => setPlayingVideo({ id: v.video_id, title: v.title || v.provider_key, duration: v.duration })}
-                      disabled={v.status !== "available"}
-                      className={cn(
-                        "p-1.5 rounded",
-                        v.status === "available"
-                          ? v.watch_is_finished
+                  {v.status === "available" ? (
+                    <Tooltip title={
+                      v.watch_is_finished ? "Play (finished)" :
+                      (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95)
+                        ? `Play (in progress, ${Math.round(v.watch_progress_percent)}%)`
+                        : "Play"
+                    }>
+                      <button
+                        type="button"
+                        onClick={() => setPlayingVideo({ id: v.video_id, title: v.title || v.provider_key, duration: v.duration })}
+                        className={cn(
+                          "p-1.5 rounded",
+                          v.watch_is_finished
                             ? "text-purple-400 hover:text-purple-300 hover:bg-gray-700"
                             : (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95)
                               ? "text-blue-400 hover:text-blue-300 hover:bg-gray-700"
                               : "text-gray-400 hover:text-green-400 hover:bg-gray-700"
-                          : "text-gray-600 cursor-not-allowed opacity-50"
-                      )}
-                    >
-                      <Play className="w-4 h-4" />
-                    </button>
-                  </Tooltip>
+                        )}
+                      >
+                        <Play className="w-4 h-4" />
+                      </button>
+                    </Tooltip>
+                  ) : (
+                    <span className="text-gray-500">—</span>
+                  )}
                 </td>
               </tr>
             ))}

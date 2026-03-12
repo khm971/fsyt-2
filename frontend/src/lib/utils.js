@@ -95,6 +95,54 @@ export function formatRelativeTime(isoString, now = new Date()) {
   return `${diffDay} day${diffDay === 1 ? "" : "s"} ago`;
 }
 
+/** Days in a month (1-based month). */
+function daysInMonth(month, year) {
+  return new Date(year, month, 0).getDate();
+}
+
+/**
+ * Relative time for "oldest" style display: "3 hours ago", "5 days ago", "2 months and 4 days ago", "1 year ago".
+ * Uses calendar-aware months and years when the gap is large.
+ * @param {string} isoString - ISO date string
+ * @param {Date} [now] - Reference time (default: new Date())
+ */
+export function formatRelativeTimeAgo(isoString, now = new Date()) {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "";
+  const diffMs = now.getTime() - d.getTime();
+  if (diffMs < 0) return "";
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffSec < 60) return `${diffSec} second${diffSec === 1 ? "" : "s"} ago`;
+  if (diffMin < 60) return `${diffMin} minute${diffMin === 1 ? "" : "s"} ago`;
+  if (diffHr < 24) return `${diffHr} hour${diffHr === 1 ? "" : "s"} ago`;
+  if (diffDay < 30) return `${diffDay} day${diffDay === 1 ? "" : "s"} ago`;
+  // Calendar difference for months/years
+  let years = now.getFullYear() - d.getFullYear();
+  let months = now.getMonth() - d.getMonth();
+  let days = now.getDate() - d.getDate();
+  if (days < 0) {
+    days += daysInMonth(d.getMonth(), d.getFullYear());
+    months -= 1;
+  }
+  if (months < 0) {
+    months += 12;
+    years -= 1;
+  }
+  if (years > 0) {
+    if (months === 0) return `${years} year${years === 1 ? "" : "s"} ago`;
+    return `${years} year${years === 1 ? "" : "s"} and ${months} month${months === 1 ? "" : "s"} ago`;
+  }
+  if (months > 0) {
+    if (days === 0) return `${months} month${months === 1 ? "" : "s"} ago`;
+    return `${months} month${months === 1 ? "" : "s"} and ${days} day${days === 1 ? "" : "s"} ago`;
+  }
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 /**
  * Friendly format for a scheduled run_after time: "in 20 minutes", "Tomorrow at 2:15 PM",
  * "Today at 2:15 PM", or "Should have run already" if in the past.

@@ -3,7 +3,7 @@ import { api } from "../api/client";
 import { cn, formatSmartTime } from "../lib/utils";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 200;
 const SEVERITY_COLORS = {
   5: "text-gray-500",
   10: "text-gray-400",

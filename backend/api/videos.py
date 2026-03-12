@@ -2,6 +2,7 @@
 import asyncio
 import math
 import os
+import re
 import shlex
 import shutil
 
@@ -203,6 +204,57 @@ async def list_videos_by_tags(
            ORDER BY v.video_id DESC
            LIMIT $4"""
         rows = await db.fetch(q, tag_ids, USER_ID, n_tags, limit)
+    videos = [row_to_video(r) for r in rows]
+    if videos:
+        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
+        videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
+    return videos
+
+
+def _escape_ilike(term: str) -> str:
+    """Escape % and _ for safe use in ILIKE pattern (use ESCAPE '\\' in SQL)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@router.get("/search", response_model=list[VideoResponse])
+async def search_videos(
+    q: str = Query(""),
+    include_unavailable: bool = Query(False),
+    limit: int = Query(250, le=500),
+):
+    """Videos where all search terms appear in title, description, or llm_description_1. Terms split on commas and spaces."""
+    terms = [s.strip() for s in re.split(r"[\s,]+", q) if s.strip()]
+    if not terms:
+        return []
+
+    patterns = [f"%{_escape_ilike(t)}%" for t in terms]
+    status_filter = "" if include_unavailable else " AND v.status = 'available'"
+    base = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
+                  v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
+                  v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
+                  jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
+                  uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
+                  uv.progress_seconds AS watch_progress_seconds
+           FROM video v
+           LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
+           LEFT JOIN LATERAL (
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
+             ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
+           ) jq ON true
+           WHERE (v.is_ignore IS NOT TRUE)""" + status_filter
+    # Each term must match in at least one of title, description, llm_description_1
+    conds = []
+    for i in range(len(patterns)):
+        idx = i + 2  # $1 is USER_ID
+        conds.append(
+            f"(v.title ILIKE ${idx} ESCAPE E'\\\\' OR COALESCE(v.description,'') ILIKE ${idx} ESCAPE E'\\\\' OR COALESCE(v.llm_description_1,'') ILIKE ${idx} ESCAPE E'\\\\')"
+        )
+    limit_idx = len(patterns) + 2
+    sql = f"{base} AND " + " AND ".join(conds) + f" ORDER BY v.video_id DESC LIMIT ${limit_idx}"
+    params = [USER_ID, *patterns, limit]
+    rows = await db.fetch(sql, *params)
     videos = [row_to_video(r) for r in rows]
     if videos:
         tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])

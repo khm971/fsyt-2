@@ -1,7 +1,8 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { SlidersHorizontal, Wrench, CalendarClock, AlertCircle } from "lucide-react";
+import { Info, SlidersHorizontal, Wrench, CalendarClock, AlertCircle } from "lucide-react";
 import { cn } from "../lib/utils";
 import ControlValuesPanel from "../components/ControlValuesPanel";
+import Information from "./Information";
 import Maintenance from "./Maintenance";
 import JobScheduler from "./JobScheduler";
 import ChargedErrors from "./ChargedErrors";
@@ -42,14 +43,17 @@ export default function Admin({ setError }) {
             Admin Pages
           </div>
           <nav className="space-y-1">
-            <AdminNavLink to="/admin/control-values" icon={SlidersHorizontal}>
-              Control Values
+            <AdminNavLink to="/admin/information" icon={Info}>
+              Information
             </AdminNavLink>
             <AdminNavLink to="/admin/job-scheduler" icon={CalendarClock}>
               Job Scheduler
             </AdminNavLink>
             <AdminNavLink to="/admin/maintenance" icon={Wrench}>
               Maintenance
+            </AdminNavLink>
+            <AdminNavLink to="/admin/control-values" icon={SlidersHorizontal}>
+              Control Values
             </AdminNavLink>
             <AdminNavLink to="/admin/charged-errors" icon={AlertCircle}>
               Charged Errors
@@ -59,10 +63,11 @@ export default function Admin({ setError }) {
 
         <section className="min-w-0">
           <Routes>
-            <Route index element={<Navigate to="control-values" replace />} />
-            <Route path="control-values" element={<ControlValuesPanel setError={setError} />} />
-            <Route path="maintenance" element={<Maintenance setError={setError} />} />
+            <Route index element={<Navigate to="information" replace />} />
+            <Route path="information" element={<Information setError={setError} />} />
             <Route path="job-scheduler" element={<JobScheduler setError={setError} />} />
+            <Route path="maintenance" element={<Maintenance setError={setError} />} />
+            <Route path="control-values" element={<ControlValuesPanel setError={setError} />} />
             <Route path="charged-errors" element={<ChargedErrors setError={setError} />} />
           </Routes>
         </section>

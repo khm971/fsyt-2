@@ -34,6 +34,7 @@ from api.log import router as log_router
 from api.maintenance import router as maintenance_router
 from api.status import router as status_router
 from api.scheduler import router as scheduler_router
+from api.information import router as information_router
 from scheduler_service import start_scheduler, shutdown_scheduler
 from startup_cleanup import run_startup_cleanup
 from backend_instance_context import set_backend_instance
@@ -294,6 +295,7 @@ app.include_router(log_router, prefix="/api")
 app.include_router(maintenance_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
+app.include_router(information_router, prefix="/api")
 
 
 @app.get("/health")
