@@ -18,6 +18,15 @@ function summaryFromJobs(jobsList) {
   );
   const errors = list.filter((j) => j.error_flag && !j.acknowledge_flag);
   const warnings = list.filter((j) => j.warning_flag && !j.acknowledge_flag);
+  const futureScheduled = list.filter(
+    (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
+  );
+  const nextScheduled = futureScheduled.length > 0
+    ? futureScheduled.reduce((a, j) => (!a || new Date(j.run_after) < new Date(a.run_after) ? j : a), null)
+    : null;
+  const lastScheduled = futureScheduled.length > 0
+    ? futureScheduled.reduce((a, j) => (!a || new Date(j.run_after) > new Date(a.run_after) ? j : a), null)
+    : null;
   return {
     running,
     running_count: running.length,
@@ -26,6 +35,13 @@ function summaryFromJobs(jobsList) {
     total_count: list.length,
     errors_count: errors.length,
     warnings_count: warnings.length,
+    scheduled_count: futureScheduled.length,
+    next_scheduled_job: nextScheduled
+      ? { job_queue_id: nextScheduled.job_queue_id, run_after: nextScheduled.run_after, job_type: nextScheduled.job_type }
+      : null,
+    last_scheduled_job: lastScheduled
+      ? { job_queue_id: lastScheduled.job_queue_id, run_after: lastScheduled.run_after, job_type: lastScheduled.job_type }
+      : null,
   };
 }
 
@@ -97,6 +113,9 @@ export function QueueWebSocketProvider({ children }) {
             if (typeof msg.runnable_count === "number") summary.runnable_count = msg.runnable_count;
             if (typeof msg.running_count === "number") summary.running_count = msg.running_count;
             if (msg.running_job !== undefined) summary.running_job = msg.running_job;
+            if (typeof msg.scheduled_count === "number") summary.scheduled_count = msg.scheduled_count;
+            if (msg.next_scheduled_job !== undefined) summary.next_scheduled_job = msg.next_scheduled_job;
+            if (msg.last_scheduled_job !== undefined) summary.last_scheduled_job = msg.last_scheduled_job;
             setQueueSummary(summary);
           } else {
             setQueueSummary((prev) => {
@@ -106,6 +125,9 @@ export function QueueWebSocketProvider({ children }) {
               if (typeof msg.runnable_count === "number") next.runnable_count = msg.runnable_count;
               if (typeof msg.running_count === "number") next.running_count = msg.running_count;
               if (msg.running_job !== undefined) next.running_job = msg.running_job;
+              if (typeof msg.scheduled_count === "number") next.scheduled_count = msg.scheduled_count;
+              if (msg.next_scheduled_job !== undefined) next.next_scheduled_job = msg.next_scheduled_job;
+              if (msg.last_scheduled_job !== undefined) next.last_scheduled_job = msg.last_scheduled_job;
               return next;
             });
           }
@@ -193,6 +215,9 @@ export function QueueWebSocketProvider({ children }) {
             total_count: res.total_count ?? 0,
             errors_count: res.errors_count ?? 0,
             warnings_count: res.warnings_count ?? 0,
+            scheduled_count: res.scheduled_count ?? 0,
+            next_scheduled_job: res.next_scheduled_job ?? null,
+            last_scheduled_job: res.last_scheduled_job ?? null,
           });
           setTotalCount(res.total_count ?? 0);
           setQueueUpdatedAt(Date.now());

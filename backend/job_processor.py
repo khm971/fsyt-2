@@ -626,6 +626,39 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
         if running_job_row
         else None
     )
+    scheduled_count_row = await db.fetchrow(
+        """SELECT count(*) AS n FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()"""
+    )
+    scheduled_count = int(scheduled_count_row["n"] or 0)
+    next_scheduled_row = await db.fetchrow(
+        """SELECT job_queue_id, run_after, job_type FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()
+           ORDER BY run_after ASC LIMIT 1"""
+    )
+    last_scheduled_row = await db.fetchrow(
+        """SELECT job_queue_id, run_after, job_type FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()
+           ORDER BY run_after DESC LIMIT 1"""
+    )
+    next_scheduled_job = (
+        {
+            "job_queue_id": next_scheduled_row["job_queue_id"],
+            "run_after": next_scheduled_row["run_after"].isoformat() if next_scheduled_row.get("run_after") else None,
+            "job_type": next_scheduled_row["job_type"] or "",
+        }
+        if next_scheduled_row
+        else None
+    )
+    last_scheduled_job = (
+        {
+            "job_queue_id": last_scheduled_row["job_queue_id"],
+            "run_after": last_scheduled_row["run_after"].isoformat() if last_scheduled_row.get("run_after") else None,
+            "job_type": last_scheduled_row["job_type"] or "",
+        }
+        if last_scheduled_row
+        else None
+    )
     heartbeat = await db_helpers.get_control_value("server_heartbeat")
     queue_paused = await db_helpers.get_control_bool("queue_paused")
     payload = {
@@ -635,6 +668,9 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
         "runnable_count": runnable_count,
         "running_count": running_count,
         "running_job": running_job,
+        "scheduled_count": scheduled_count,
+        "next_scheduled_job": next_scheduled_job,
+        "last_scheduled_job": last_scheduled_job,
         "heartbeat": heartbeat,
         "multiple_instances": multiple_instances,
         "queue_paused": queue_paused,

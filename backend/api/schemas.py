@@ -178,6 +178,13 @@ class JobQueueListResponse(BaseModel):
     total: int
 
 
+class JobQueueScheduledSummary(BaseModel):
+    """Minimal job info for dashboard scheduled widget (next/last scheduled)."""
+    job_queue_id: int
+    run_after: Optional[datetime] = None
+    job_type: str = ""
+
+
 class JobQueueSummaryResponse(BaseModel):
     running: list[JobQueueResponse]
     running_count: int
@@ -186,6 +193,9 @@ class JobQueueSummaryResponse(BaseModel):
     total_count: int
     errors_count: int
     warnings_count: int
+    scheduled_count: int = 0
+    next_scheduled_job: Optional[JobQueueScheduledSummary] = None
+    last_scheduled_job: Optional[JobQueueScheduledSummary] = None
 
 
 # ----- Scheduler entry -----

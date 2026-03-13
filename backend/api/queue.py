@@ -3,7 +3,14 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 
 from database import db
-from api.schemas import JobQueueCreate, JobQueueListResponse, JobQueueResponse, JobQueueSummaryResponse, JobQueueUpdate
+from api.schemas import (
+    JobQueueCreate,
+    JobQueueListResponse,
+    JobQueueResponse,
+    JobQueueScheduledSummary,
+    JobQueueSummaryResponse,
+    JobQueueUpdate,
+)
 from job_processor import broadcast_queue_update
 from log_helper import log_event, SEVERITY_INFO
 
@@ -99,6 +106,39 @@ async def get_queue_summary():
            WHERE status != 'new' AND status != 'done' AND status != 'cancelled'
            ORDER BY last_update DESC NULLS LAST LIMIT 20"""
     )
+    scheduled_count_row = await db.fetchrow(
+        """SELECT count(*) AS n FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()"""
+    )
+    scheduled_count = int(scheduled_count_row["n"] or 0)
+    next_scheduled_row = await db.fetchrow(
+        """SELECT job_queue_id, run_after, job_type FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()
+           ORDER BY run_after ASC LIMIT 1"""
+    )
+    last_scheduled_row = await db.fetchrow(
+        """SELECT job_queue_id, run_after, job_type FROM job_queue
+           WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()
+           ORDER BY run_after DESC LIMIT 1"""
+    )
+    next_scheduled_job = (
+        JobQueueScheduledSummary(
+            job_queue_id=next_scheduled_row["job_queue_id"],
+            run_after=next_scheduled_row["run_after"],
+            job_type=next_scheduled_row["job_type"] or "",
+        )
+        if next_scheduled_row
+        else None
+    )
+    last_scheduled_job = (
+        JobQueueScheduledSummary(
+            job_queue_id=last_scheduled_row["job_queue_id"],
+            run_after=last_scheduled_row["run_after"],
+            job_type=last_scheduled_row["job_type"] or "",
+        )
+        if last_scheduled_row
+        else None
+    )
     return JobQueueSummaryResponse(
         running=[row_to_job(r) for r in running_rows],
         running_count=int(counts_row["running_count"] or 0),
@@ -107,6 +147,9 @@ async def get_queue_summary():
         total_count=int(counts_row["total_count"] or 0),
         errors_count=int(counts_row["errors_count"] or 0),
         warnings_count=int(counts_row["warnings_count"] or 0),
+        scheduled_count=scheduled_count,
+        next_scheduled_job=next_scheduled_job,
+        last_scheduled_job=last_scheduled_job,
     )
 
 

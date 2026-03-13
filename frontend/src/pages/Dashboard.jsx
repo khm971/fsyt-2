@@ -128,28 +128,37 @@ export default function Dashboard({ setError }) {
     (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
   );
   const jobsWithRunAfter = jobs.filter((j) => j.status === "new" && j.run_after != null);
-  const lastScheduledRunAfter =
+  const lastScheduledRunAfterFromJobs =
     jobsWithRunAfter.length > 0
       ? Math.max(...jobsWithRunAfter.map((j) => new Date(j.run_after).getTime()))
       : null;
-  const nextScheduledRunAfter =
+  const nextScheduledRunAfterFromJobs =
     futureScheduled.length > 0
       ? Math.min(...futureScheduled.map((j) => new Date(j.run_after).getTime()))
       : null;
-  const nextScheduledJob =
-    futureScheduled.length > 0 && nextScheduledRunAfter != null
-      ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfter)
+  const nextScheduledJobFromJobs =
+    futureScheduled.length > 0 && nextScheduledRunAfterFromJobs != null
+      ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfterFromJobs)
       : null;
+  const lastScheduledJobFromJobs =
+    jobsWithRunAfter.length > 0 && lastScheduledRunAfterFromJobs != null
+      ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfterFromJobs)
+      : null;
+  const scheduledCount = futureScheduled.length > 0 ? futureScheduled.length : (queueSummary?.scheduled_count ?? 0);
+  const nextScheduledJob = nextScheduledJobFromJobs ?? queueSummary?.next_scheduled_job ?? null;
+  const lastScheduledJob = lastScheduledJobFromJobs ?? queueSummary?.last_scheduled_job ?? null;
+  const nextScheduledRunAfter =
+    nextScheduledRunAfterFromJobs ??
+    (nextScheduledJob?.run_after != null ? new Date(nextScheduledJob.run_after).getTime() : null);
+  const lastScheduledRunAfter =
+    lastScheduledRunAfterFromJobs ??
+    (lastScheduledJob?.run_after != null ? new Date(lastScheduledJob.run_after).getTime() : null);
   useEffect(() => {
     if (queueSummary == null && refreshSummary && !queueRefreshTriggeredRef.current) {
       queueRefreshTriggeredRef.current = true;
       refreshSummary();
     }
   }, [queueSummary, refreshSummary]);
-  const lastScheduledJob =
-    jobsWithRunAfter.length > 0 && lastScheduledRunAfter != null
-      ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfter)
-      : null;
 
   if (loading) {
     return (
@@ -263,7 +272,7 @@ export default function Dashboard({ setError }) {
                 )}
               </div>
             )}
-            {futureScheduled.length > 0 && nextScheduledRunAfter != null && nextScheduledJob && (
+            {scheduledCount > 0 && nextScheduledRunAfter != null && nextScheduledJob && (
               <div className="flex items-center gap-1.5 text-gray-300 pt-0.5 flex-wrap">
                 <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
                 <Tooltip
@@ -279,17 +288,17 @@ export default function Dashboard({ setError }) {
                     Next scheduled: {formatScheduledRunAfter(new Date(nextScheduledRunAfter).toISOString(), now)}
                   </button>
                 </Tooltip>
-                {futureScheduled.length > 1 && (
+                {scheduledCount > 1 && (
                   <Link
                     to="/queue?filter=scheduled"
                     className="text-cyan-400 ml-1 hover:text-cyan-300"
                   >
-                    ({futureScheduled.length} total)
+                    ({scheduledCount} total)
                   </Link>
                 )}
               </div>
             )}
-            {futureScheduled.length > 0 && lastScheduledRunAfter != null && lastScheduledJob && (
+            {scheduledCount > 0 && lastScheduledRunAfter != null && lastScheduledJob && (
               <div className="flex items-center gap-1.5 text-gray-300 pt-0.5">
                 <CalendarClock className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
                 <Tooltip
