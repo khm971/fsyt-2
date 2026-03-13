@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from database import db
 from services.tools import get_media_root
 from pydantic import BaseModel
-from api.schemas import VideoCreate, VideoUpdate, VideoResponse, TagResponse
+from api.schemas import VideoCreate, VideoUpdate, VideoResponse, VideoListResponse, TagResponse
 from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_WARNING, SEVERITY_ERROR
 
 USER_ID = 1  # No login; assume single user
@@ -69,15 +69,41 @@ def row_to_video(r) -> VideoResponse:
     )
 
 
-@router.get("", response_model=list[VideoResponse])
+@router.get("", response_model=VideoListResponse)
 async def list_videos(
     channel_id: int | None = Query(None),
     include_ignored: bool = Query(False),
-    limit: int = Query(250, le=500),
+    limit: int = Query(200, le=500),
+    offset: int = Query(0, ge=0),
     sort_by: str = Query("id", pattern="^(id|title|status)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
+    count_where_parts = ["1=1"]
+    count_params: list = []
+    ci = 1
+    if channel_id is not None:
+        count_where_parts.append(f"v.channel_id = ${ci}")
+        count_params.append(channel_id)
+        ci += 1
+    if not include_ignored:
+        count_where_parts.append("(v.is_ignore IS NOT TRUE)")
+    count_where_sql = " AND ".join(count_where_parts)
+
+    count_q = f"SELECT COUNT(*) FROM video v WHERE {count_where_sql}"
+    total = await db.fetchval(count_q, *count_params) or 0
+
+    main_where_parts = ["1=1"]
+    params: list = [USER_ID]
+    i = 2
+    if channel_id is not None:
+        main_where_parts.append(f"v.channel_id = ${i}")
+        params.append(channel_id)
+        i += 1
+    if not include_ignored:
+        main_where_parts.append("(v.is_ignore IS NOT TRUE)")
+    main_where_sql = " AND ".join(main_where_parts)
+
+    q = f"""SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
@@ -90,25 +116,18 @@ async def list_videos(
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
-           WHERE 1=1"""
-    params = [USER_ID]
-    i = 2
-    if channel_id is not None:
-        q += f" AND v.channel_id = ${i}"
-        params.append(channel_id)
-        i += 1
-    if not include_ignored:
-        q += " AND (v.is_ignore IS NOT TRUE)"
+           WHERE {main_where_sql}"""
     col = {"id": "v.video_id", "title": "v.title", "status": "v.status"}[sort_by]
     dirn = "ASC" if sort_order == "asc" else "DESC"
-    q += f" ORDER BY {col} {dirn} LIMIT ${i}"
+    q += f" ORDER BY {col} {dirn} LIMIT ${i} OFFSET ${i + 1}"
     params.append(limit)
+    params.append(offset)
     rows = await db.fetch(q, *params)
     videos = [row_to_video(r) for r in rows]
     if videos:
         tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
-    return videos
+    return VideoListResponse(videos=videos, total=int(total))
 
 
 @router.get("/watch", response_model=list[VideoResponse])
@@ -146,15 +165,17 @@ async def list_watch_in_progress(limit: int = Query(250, le=500)):
 async def list_videos_by_tags(
     tag_ids: list[int] = Query(..., min_length=1),
     tag_match: str = Query("any", pattern="^(all|any)$"),
+    include_unavailable: bool = Query(False),
     limit: int = Query(250, le=500),
 ):
     """Videos that have the given tags (all or any). Returns same shape as watch list with watch progress."""
     await log_event(
-        f"Videos by tags: tag_ids={tag_ids!r} tag_match={tag_match!r}",
-        SEVERITY_INFO,
+        f"Videos by tags: tag_ids={tag_ids!r} tag_match={tag_match!r} include_unavailable={include_unavailable!r}",
+        SEVERITY_LOW_LEVEL,
     )
     tag_ids = list(dict.fromkeys(tag_ids))  # dedupe preserving order
     n_tags = len(tag_ids)
+    status_filter = "" if include_unavailable else " AND v.status = 'available'"
 
     if tag_match == "any":
         q = f"""SELECT DISTINCT ON (v.video_id) v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
@@ -172,8 +193,7 @@ async def list_videos_by_tags(
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
-           WHERE v.status = 'available'
-             AND (v.is_ignore IS NOT TRUE)
+           WHERE (v.is_ignore IS NOT TRUE){status_filter}
            ORDER BY v.video_id DESC
            LIMIT $3"""
         rows = await db.fetch(q, tag_ids, USER_ID, limit)
@@ -193,8 +213,7 @@ async def list_videos_by_tags(
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
-           WHERE v.status = 'available'
-             AND (v.is_ignore IS NOT TRUE)
+           WHERE (v.is_ignore IS NOT TRUE){status_filter}
            GROUP BY v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete, jq.job_queue_id, jq.job_type,
@@ -882,12 +901,16 @@ async def create_video(body: VideoCreate):
         provider_key,
         channel_id,
     )
+    new_job_id = None
     if body.queue_download:
-        await db.execute(
+        job_row = await db.fetchrow(
             """INSERT INTO job_queue (job_type, video_id, status, priority)
-               VALUES ('download_video', $1, 'new', 40)""",
+               VALUES ('download_video', $1, 'new', 40)
+               RETURNING job_queue_id""",
             row["video_id"],
         )
+        if job_row:
+            new_job_id = job_row["job_queue_id"]
     if getattr(body, "tag_needs_review", True):
         tag_row = await db.fetchrow(
             """SELECT tag_id FROM tag WHERE user_id = $1 AND LOWER(title) = 'needs review'""",
@@ -905,7 +928,7 @@ async def create_video(body: VideoCreate):
                 SEVERITY_INFO,
                 video_id=row["video_id"],
             )
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=new_job_id)
     await log_event(f"Video created: {provider_key} (video_id={row['video_id']}, channel_id={channel_id})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
     return row_to_video(dict(row, status_percent_complete=None))
 

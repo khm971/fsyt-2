@@ -104,7 +104,24 @@ export default function Dashboard({ setError }) {
   const isJobInProgress = (j) => j.status != null && j.status !== "new" && j.status !== "done" && j.status !== "cancelled";
   const runningCount = queueSummary?.running_count ?? jobs.filter(isJobInProgress).length;
   const running = queueSummary?.running?.length ? queueSummary.running : jobs.filter(isJobInProgress);
-  const queuedCount = queueSummary?.queued_count ?? jobs.filter((j) => j.status === "new").length;
+  const runningJob =
+    queueSummary?.running_job != null
+      ? queueSummary.running_job
+      : running[0] != null
+        ? {
+            job_queue_id: running[0].job_queue_id,
+            job_type: running[0].job_type,
+            status_percent_complete: running[0].status_percent_complete,
+            video_id: running[0].video_id ?? undefined,
+          }
+        : null;
+  const runnableCount =
+    queueSummary?.runnable_count ??
+    jobs.filter(
+      (j) =>
+        j.status === "new" &&
+        (!j.run_after || new Date(j.run_after) <= now)
+    ).length;
   const errorsCount = queueSummary?.errors_count ?? jobs.filter((j) => j.error_flag && !j.acknowledge_flag).length;
   const warningsCount = queueSummary?.warnings_count ?? jobs.filter((j) => j.warning_flag && !j.acknowledge_flag).length;
   const futureScheduled = jobs.filter(
@@ -167,15 +184,15 @@ export default function Dashboard({ setError }) {
               {runningCount > 0 ? (
                 <Tooltip
                   title={
-                    running[0]?.status_percent_complete != null
-                      ? `${running[0].job_type} (${running[0].status_percent_complete}%)`
-                      : running[0]?.job_type
+                    runningJob?.status_percent_complete != null
+                      ? `${runningJob.job_type} (${runningJob.status_percent_complete}%)`
+                      : runningJob?.job_type
                   }
                   side="top"
                 >
                   <button
                     type="button"
-                    onClick={() => setJobQueueIdForModal(running[0]?.job_queue_id)}
+                    onClick={() => setJobQueueIdForModal(runningJob?.job_queue_id)}
                     className="flex items-center gap-1.5 text-green-400 hover:text-green-300 text-left"
                   >
                     <PlayCircle className="w-3.5 h-3.5" />
@@ -188,27 +205,31 @@ export default function Dashboard({ setError }) {
                   {runningCount} running
                 </span>
               )}
-              {queuedCount > 0 ? (
+              {runnableCount > 0 ? (
                 <Link
                   to="/queue?filter=queued"
-                  className="flex items-center gap-1.5 text-gray-300 hover:text-white"
+                  className={cn(
+                    "flex items-center gap-1.5",
+                    runnableCount >= 10
+                      ? "text-yellow-400 hover:text-yellow-300"
+                      : "text-blue-400 hover:text-blue-300"
+                  )}
                 >
                   <Clock className="w-3.5 h-3.5" />
-                  {queuedCount} queued
+                  {runnableCount} runnable
                 </Link>
               ) : (
                 <span className="flex items-center gap-1.5 text-gray-300">
                   <Clock className="w-3.5 h-3.5" />
-                  {queuedCount} queued
+                  {runnableCount} runnable
                 </span>
               )}
             </div>
-            {runningCount > 0 && running[0] && (() => {
-              const job = running[0];
+            {runningCount > 0 && runningJob && (() => {
               const percent =
-                job.video_id != null && videoProgressOverrides[job.video_id]?.status_percent_complete != null
-                  ? videoProgressOverrides[job.video_id].status_percent_complete
-                  : job.status_percent_complete;
+                runningJob.video_id != null && videoProgressOverrides[runningJob.video_id]?.status_percent_complete != null
+                  ? videoProgressOverrides[runningJob.video_id].status_percent_complete
+                  : runningJob.status_percent_complete;
               return percent != null && percent >= 1 && percent <= 99 ? (
                 <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
                   <div

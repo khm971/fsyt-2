@@ -7,6 +7,9 @@ import {
   CheckCircle, Loader2, Search, FileCheck, Brain, Settings, XCircle, AlertCircle, HelpCircle,
   ListTodo, CalendarClock, MessageCircle, CircleDot,
 } from "lucide-react";
+import { PaginationBar } from "../components/PaginationBar";
+
+const PAGE_SIZE = 200;
 
 const STATUS_LABELS = {
   available: "Available",
@@ -91,6 +94,8 @@ export default function Videos({ setError }) {
   const [channelFilter, setChannelFilter] = useState(channelFromUrl);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("desc");
+  const [page, setPage] = useState(1);
+  const [totalVideos, setTotalVideos] = useState(0);
   const [addForm, setAddForm] = useState({ provider_key: "", queue_download: true });
   const [playingVideo, setPlayingVideo] = useState(null);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
@@ -102,14 +107,20 @@ export default function Videos({ setError }) {
 
   const loadVideos = useCallback(async () => {
     try {
-      const params = { sort_by: sortBy, sort_order: sortOrder };
+      const params = {
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      };
       if (channelFilter) params.channel_id = parseInt(channelFilter, 10);
-      const list = await api.videos.list(params);
-      setVideos(list);
+      const data = await api.videos.list(params);
+      setVideos(data.videos);
+      setTotalVideos(data.total);
     } catch (e) {
       setError(e.message);
     }
-  }, [channelFilter, sortBy, sortOrder, setError]);
+  }, [channelFilter, sortBy, sortOrder, page, setError]);
 
   const refreshVideoTags = useCallback((videoId) => {
     api.videos
@@ -138,11 +149,11 @@ export default function Videos({ setError }) {
     }
   }, [channelFromUrl]);
 
-  // Initial load and when filters change
+  // Initial load and when filters or page change
   useEffect(() => {
     setLoading(true);
     Promise.all([loadVideos(), loadChannels()]).finally(() => setLoading(false));
-  }, [channelFilter, sortBy, sortOrder]);
+  }, [channelFilter, sortBy, sortOrder, page]);
 
   // Refetch when backend notifies that a video was updated (e.g. job finished)
   useEffect(() => {
@@ -197,6 +208,7 @@ export default function Videos({ setError }) {
             onChange={(e) => {
               const val = e.target.value;
               setChannelFilter(val);
+              setPage(1);
               setSearchParams(val ? { channel_id: val } : {});
             }}
             className="input w-40"
@@ -211,6 +223,18 @@ export default function Videos({ setError }) {
         </div>
       </div>
 
+      {totalVideos > 0 && (
+        <PaginationBar
+          page={page}
+          totalPages={Math.max(1, Math.ceil(totalVideos / PAGE_SIZE))}
+          total={totalVideos}
+          pageSize={PAGE_SIZE}
+          itemLabel="videos"
+          onPageChange={setPage}
+          disabled={loading}
+        />
+      )}
+
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/80 text-gray-400">
@@ -221,7 +245,7 @@ export default function Videos({ setError }) {
                   <Tooltip title={sortBy === "id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by ID"}>
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -238,7 +262,7 @@ export default function Videos({ setError }) {
                   <Tooltip title={sortBy === "title" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Title"}>
                     <button
                       type="button"
-                      onClick={() => { setSortBy("title"); if (sortBy === "title") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else setSortOrder("asc"); }}
+                      onClick={() => { setPage(1); setSortBy("title"); if (sortBy === "title") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else setSortOrder("asc"); }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "title" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -255,7 +279,7 @@ export default function Videos({ setError }) {
                   <Tooltip title={sortBy === "status" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Status"}>
                     <button
                       type="button"
-                      onClick={() => { setSortBy("status"); if (sortBy === "status") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else setSortOrder("asc"); }}
+                      onClick={() => { setPage(1); setSortBy("status"); if (sortBy === "status") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else setSortOrder("asc"); }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "status" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -406,6 +430,18 @@ export default function Videos({ setError }) {
           <div className="px-4 py-8 text-center text-gray-500">No videos.</div>
         )}
       </div>
+
+      {totalVideos > 0 && (
+        <PaginationBar
+          page={page}
+          totalPages={Math.max(1, Math.ceil(totalVideos / PAGE_SIZE))}
+          total={totalVideos}
+          pageSize={PAGE_SIZE}
+          itemLabel="videos"
+          onPageChange={setPage}
+          disabled={loading}
+        />
+      )}
 
       {playingVideo && (
         <VideoPlayer

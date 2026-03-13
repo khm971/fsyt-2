@@ -34,12 +34,18 @@ def row_to_job(r) -> JobQueueResponse:
     )
 
 
+# Columns that may be null: use NULLS LAST in ORDER BY for stable sort
+_NULLABLE_SORT_COLS = {"video_id", "last_update", "record_created", "status", "job_type", "priority"}
+
+
 @router.get("", response_model=JobQueueListResponse)
 async def list_jobs(
     status: str | None = Query(None),
     scheduler_entry_id: int | None = Query(None),
     limit: int = Query(500, le=500),
     offset: int = Query(0, ge=0),
+    sort_by: str = Query("id", pattern="^(id|video_id|status|last_update|record_created|job_type|priority)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     where = "WHERE 1=1"
     params = []
@@ -56,12 +62,16 @@ async def list_jobs(
         f"SELECT COUNT(*) AS total FROM job_queue {where}", *params
     )
     total = int(total_row["total"] or 0)
+    sort_col = "job_queue_id" if sort_by == "id" else sort_by
+    dirn = "ASC" if sort_order == "asc" else "DESC"
+    nulls = " NULLS LAST" if sort_col in _NULLABLE_SORT_COLS else ""
+    order_clause = f"ORDER BY {sort_col} {dirn}{nulls}"
     q = f"""SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                   run_after, priority, scheduler_entry_id
            FROM job_queue {where}
-           ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT ${i} OFFSET ${i + 1}"""
+           {order_clause} LIMIT ${i} OFFSET ${i + 1}"""
     params.extend([limit, offset])
     rows = await db.fetch(q, *params)
     return JobQueueListResponse(items=[row_to_job(r) for r in rows], total=total)
@@ -74,6 +84,7 @@ async def get_queue_summary():
         """SELECT
              count(*) FILTER (WHERE status != 'new' AND status != 'done' AND status != 'cancelled') AS running_count,
              count(*) FILTER (WHERE status = 'new') AS queued_count,
+             count(*) FILTER (WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())) AS runnable_count,
              count(*) AS total_count,
              count(*) FILTER (WHERE error_flag AND NOT acknowledge_flag) AS errors_count,
              count(*) FILTER (WHERE warning_flag AND NOT acknowledge_flag) AS warnings_count
@@ -92,6 +103,7 @@ async def get_queue_summary():
         running=[row_to_job(r) for r in running_rows],
         running_count=int(counts_row["running_count"] or 0),
         queued_count=int(counts_row["queued_count"] or 0),
+        runnable_count=int(counts_row["runnable_count"] or 0),
         total_count=int(counts_row["total_count"] or 0),
         errors_count=int(counts_row["errors_count"] or 0),
         warnings_count=int(counts_row["warnings_count"] or 0),
@@ -113,9 +125,19 @@ async def get_job(job_id: int):
     return row_to_job(r)
 
 
-@router.post("", response_model=JobQueueResponse, status_code=201)
-async def create_job(body: JobQueueCreate):
-    if body.job_type == "trim_job_queue":
+def _validate_job_create(body: JobQueueCreate) -> None:
+    """Validate required parameters for job creation. Raises HTTPException 400 if invalid."""
+    t = body.job_type
+    if t in ("download_video", "get_metadata", "transcode_video_for_ipad"):
+        if body.video_id is None or body.video_id < 1:
+            raise HTTPException(400, f"{t} requires video_id (positive integer)")
+    if t in ("download_channel_artwork", "download_one_channel", "update_channel_info"):
+        if body.channel_id is None or body.channel_id < 1:
+            raise HTTPException(400, f"{t} requires channel_id (positive integer)")
+    if t in ("add_video_from_frontend", "add_video_from_playlist"):
+        if not body.parameter or not body.parameter.strip():
+            raise HTTPException(400, f"{t} requires parameter (YouTube URL or video ID)")
+    if t == "trim_job_queue":
         if not body.parameter or not body.parameter.strip():
             raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
         try:
@@ -124,6 +146,11 @@ async def create_job(body: JobQueueCreate):
             raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
         if age_days < 3:
             raise HTTPException(400, "trim_job_queue requires parameter 'age in days' (integer, minimum 3)")
+
+
+@router.post("", response_model=JobQueueResponse, status_code=201)
+async def create_job(body: JobQueueCreate):
+    _validate_job_create(body)
     row = await db.fetchrow(
         """INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
@@ -143,7 +170,7 @@ async def create_job(body: JobQueueCreate):
         body.priority,
         body.scheduler_entry_id,
     )
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=row["job_queue_id"])
     j = row_to_job(row)
     await log_event(f"Job queued: {j.job_type} (ID {j.job_queue_id}, video_id={j.video_id}, channel_id={j.channel_id})", SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id)
     return j
@@ -195,7 +222,7 @@ async def update_job(job_id: int, body: JobQueueUpdate):
                      run_after, priority, scheduler_entry_id""",
         *params,
     )
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=job_id)
     return row_to_job(row)
 
 
@@ -211,7 +238,7 @@ async def acknowledge_job(job_id: int):
     )
     if not r:
         raise HTTPException(404, "Job not found")
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=job_id)
     vid, cid = r.get("video_id"), r.get("channel_id")
     extra = [f"video_id={vid}"] if vid is not None else []
     if cid is not None:
@@ -233,7 +260,7 @@ async def unacknowledge_job(job_id: int):
     )
     if not r:
         raise HTTPException(404, "Job not found")
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=job_id)
     vid, cid = r.get("video_id"), r.get("channel_id")
     extra = [f"video_id={vid}"] if vid is not None else []
     if cid is not None:
@@ -255,7 +282,7 @@ async def cancel_job(job_id: int):
     )
     if not r:
         raise HTTPException(404, "Job not found or not cancellable")
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=job_id)
     vid, cid = r.get("video_id"), r.get("channel_id")
     extra = [f"video_id={vid}"] if vid is not None else []
     if cid is not None:

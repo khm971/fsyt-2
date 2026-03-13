@@ -3,12 +3,23 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { cn, formatDateTimeWithSeconds } from "../lib/utils";
-import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock, Search, Filter, CheckCheck, ChevronLeft, ChevronRight } from "lucide-react";
+import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock, Search, Filter, CheckCheck } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
+import { PaginationBar } from "../components/PaginationBar";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
+import {
+  JOB_TYPES,
+  jobTypeUsesVideoId,
+  jobTypeUsesChannelId,
+  getVideoIdRequirement,
+  getChannelIdRequirement,
+  getParameterConfig,
+  isJobTypeImplemented,
+  validateJobParams,
+} from "../lib/jobTypes";
 
 export default function Queue({ setError }) {
   const toast = useToast();
@@ -17,10 +28,10 @@ export default function Queue({ setError }) {
   const filterQueued = searchParams.get("filter") === "queued";
   const filterScheduled = searchParams.get("filter") === "scheduled";
   const PAGE_SIZE = 500;
-  const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides, refreshQueue } = useQueueWebSocket();
+  const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides, jobOverrides, refreshQueue } = useQueueWebSocket();
   const [control, setControl] = useState({});
   const [paused, setPaused] = useState(false);
-  const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", parameter: "", priority: 50 });
+  const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", channel_id: "", parameter: "", priority: 50 });
   const [showAdd, setShowAdd] = useState(false);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
@@ -31,8 +42,12 @@ export default function Queue({ setError }) {
   const [page, setPage] = useState(1);
   const [pageJobs, setPageJobs] = useState([]);
   const [pageLoading, setPageLoading] = useState(false);
+  const [channels, setChannels] = useState([]);
 
-  const displayJobs = page === 1 ? jobs : pageJobs;
+  const displayJobs = useMemo(
+    () => pageJobs.map((j) => (jobOverrides[j.job_queue_id] ? { ...j, ...jobOverrides[j.job_queue_id] } : j)),
+    [pageJobs, jobOverrides]
+  );
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   useEffect(() => {
@@ -40,16 +55,26 @@ export default function Queue({ setError }) {
   }, [page, jobs.length, totalCount, refreshQueue]);
 
   useEffect(() => {
-    if (page <= 1) return;
+    if (showAdd) {
+      api.channels.list().then(setChannels).catch(() => setChannels([]));
+    }
+  }, [showAdd]);
+
+  useEffect(() => {
     setPageLoading(true);
     api.queue
-      .list({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE })
+      .list({
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      })
       .then((res) => {
         setPageJobs(res.items || []);
       })
       .catch((e) => setError(e.message))
       .finally(() => setPageLoading(false));
-  }, [page, queueUpdatedAt]);
+  }, [page, sortBy, sortOrder]);
 
   useEffect(() => {
     if (totalCount > 0 && page > totalPages) setPage(totalPages);
@@ -185,20 +210,30 @@ export default function Queue({ setError }) {
   };
 
   const addJob = async () => {
+    const err = validateJobParams(addForm.job_type, {
+      video_id: addForm.video_id,
+      channel_id: addForm.channel_id,
+      parameter: addForm.parameter,
+    });
+    if (err) {
+      toast.addToast(err, "error");
+      return;
+    }
     try {
-      if (addForm.job_type === "trim_job_queue") {
-        const age = parseInt(addForm.parameter, 10);
-        if (Number.isNaN(age) || age < 3) {
-          toast.addToast("Age (days) must be at least 3", "error");
-          return;
-        }
-      }
       const body = {
         job_type: addForm.job_type,
         priority: addForm.priority,
       };
-      if (addForm.video_id) body.video_id = parseInt(addForm.video_id, 10);
-      if (addForm.job_type === "trim_job_queue") body.parameter = String(addForm.parameter).trim();
+      if (jobTypeUsesVideoId(addForm.job_type) && addForm.video_id) {
+        body.video_id = parseInt(addForm.video_id, 10);
+      }
+      if (jobTypeUsesChannelId(addForm.job_type) && addForm.channel_id) {
+        body.channel_id = parseInt(addForm.channel_id, 10);
+      }
+      const paramConfig = getParameterConfig(addForm.job_type);
+      if (paramConfig && addForm.parameter.trim()) {
+        body.parameter = addForm.parameter.trim();
+      }
       const j = await api.queue.create(body);
       setShowAdd(false);
       const extra = [];
@@ -286,34 +321,15 @@ export default function Queue({ setError }) {
       </div>
 
       {totalCount > PAGE_SIZE && (
-        <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-3 bg-gray-800/60 border border-gray-700 rounded-lg">
-          <span className="text-sm text-gray-400">
-            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalCount)} of {totalCount} jobs
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-700"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              Previous
-            </button>
-            <span className="text-sm text-gray-400 px-1">
-              Page {page} of {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={page >= totalPages}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-700"
-            >
-              Next
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          total={totalCount}
+          pageSize={PAGE_SIZE}
+          itemLabel="jobs"
+          onPageChange={setPage}
+          disabled={pageLoading}
+        />
       )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
@@ -333,7 +349,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by ID"}>
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -350,7 +366,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "priority" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Priority"}>
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "priority") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("priority"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "priority") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("priority"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "priority" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -367,7 +383,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "job_type" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Type"} side="top">
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "job_type") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("job_type"); setSortOrder("asc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "job_type") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("job_type"); setSortOrder("asc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "job_type" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -384,7 +400,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "video_id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Video ID"}>
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "video_id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("video_id"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "video_id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("video_id"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "video_id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -401,7 +417,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "status" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Status"}>
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "status") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("status"); setSortOrder("asc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "status") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("status"); setSortOrder("asc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "status" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -418,7 +434,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "record_created" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by record created"} side="top">
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "record_created") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("record_created"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "record_created") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("record_created"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "record_created" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -435,7 +451,7 @@ export default function Queue({ setError }) {
                   <Tooltip title={sortBy === "last_update" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by last update"} side="top">
                     <button
                       type="button"
-                      onClick={() => { if (sortBy === "last_update") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("last_update"); setSortOrder("desc"); } }}
+                      onClick={() => { setPage(1); if (sortBy === "last_update") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("last_update"); setSortOrder("desc"); } }}
                       className={cn(
                         "p-0.5 rounded hover:bg-gray-700",
                         sortBy === "last_update" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
@@ -484,13 +500,22 @@ export default function Queue({ setError }) {
                       <span
                         className={cn(
                           "inline-block",
-                          j.status === "done" && "text-green-400",
-                          j.status === "running" && "text-blue-400",
-                          j.status === "error" && "text-red-400",
-                          j.status === "new" && "text-gray-400"
+                          (() => {
+                            const displayStatus = j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
+                              ? videoProgressOverrides[j.video_id].status
+                              : j.status;
+                            return (
+                              (displayStatus === "done" && "text-green-400") ||
+                              (displayStatus === "running" && "text-blue-400") ||
+                              (displayStatus === "error" && "text-red-400") ||
+                              (displayStatus === "new" && "text-gray-400")
+                            );
+                          })()
                         )}
                       >
-                        {j.status}
+                        {j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
+                          ? videoProgressOverrides[j.video_id].status
+                          : j.status}
                       </span>
                     </Tooltip>
                     {(() => {
@@ -613,6 +638,18 @@ export default function Queue({ setError }) {
         )}
       </div>
 
+      {totalCount > PAGE_SIZE && (
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          total={totalCount}
+          pageSize={PAGE_SIZE}
+          itemLabel="jobs"
+          onPageChange={setPage}
+          disabled={pageLoading}
+        />
+      )}
+
       {showAckAllModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowAckAllModal(false)}>
           <div
@@ -692,40 +729,64 @@ export default function Queue({ setError }) {
                   onChange={(e) => setAddForm({ ...addForm, job_type: e.target.value })}
                   className="input"
                 >
-                  <option value="get_metadata">get_metadata</option>
-                  <option value="download_video">download_video</option>
-                  <option value="fill_missing_metadata">fill_missing_metadata</option>
-                  <option value="queue_all_downloads">queue_all_downloads</option>
-                  <option value="download_channel_artwork">download_channel_artwork</option>
-                  <option value="download_one_channel">download_one_channel</option>
-                  <option value="download_auto_enabled_channels">download_auto_enabled_channels</option>
-                  <option value="update_channel_info">update_channel_info</option>
-                  <option value="trim_job_queue">trim_job_queue</option>
+                  {JOB_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
                 </select>
               </label>
-              {addForm.job_type === "trim_job_queue" && (
+              {!isJobTypeImplemented(addForm.job_type) && (
+                <p className="text-amber-400 text-sm">This job type is not implemented yet.</p>
+              )}
+              {jobTypeUsesVideoId(addForm.job_type) && (
                 <label className="block">
-                  <span className="text-gray-400 block mb-1">Age (days)</span>
+                  <span className="text-gray-400 block mb-1">
+                    Video ID ({getVideoIdRequirement(addForm.job_type) === "required" ? "required" : "optional"})
+                  </span>
                   <input
                     type="number"
-                    min={3}
-                    value={addForm.parameter}
-                    onChange={(e) => setAddForm({ ...addForm, parameter: e.target.value })}
+                    min={1}
+                    value={addForm.video_id}
+                    onChange={(e) => setAddForm({ ...addForm, video_id: e.target.value })}
                     className="input"
-                    placeholder="e.g. 7"
+                    placeholder=""
                   />
                 </label>
               )}
-              <label className="block">
-                <span className="text-gray-400 block mb-1">Video ID (optional)</span>
-                <input
-                  type="number"
-                  value={addForm.video_id}
-                  onChange={(e) => setAddForm({ ...addForm, video_id: e.target.value })}
-                  className="input"
-                  placeholder=""
-                />
-              </label>
+              {jobTypeUsesChannelId(addForm.job_type) && (
+                <label className="block">
+                  <span className="text-gray-400 block mb-1">
+                    Channel ({getChannelIdRequirement(addForm.job_type) === "required" ? "required" : "optional"})
+                  </span>
+                  <select
+                    value={String(addForm.channel_id)}
+                    onChange={(e) => setAddForm({ ...addForm, channel_id: e.target.value })}
+                    className="input"
+                  >
+                    <option value="">— Select channel —</option>
+                    {channels.map((c) => (
+                      <option key={c.channel_id} value={String(c.channel_id)}>
+                        {c.title || c.handle || c.channel_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {getParameterConfig(addForm.job_type) && (
+                <label className="block">
+                  <span className="text-gray-400 block mb-1">
+                    {getParameterConfig(addForm.job_type).label}
+                    {getParameterConfig(addForm.job_type).required ? " (required)" : " (optional)"}
+                  </span>
+                  <input
+                    type={getParameterConfig(addForm.job_type).inputType === "number" ? "number" : "text"}
+                    min={getParameterConfig(addForm.job_type).min}
+                    value={addForm.parameter}
+                    onChange={(e) => setAddForm({ ...addForm, parameter: e.target.value })}
+                    className="input"
+                    placeholder={getParameterConfig(addForm.job_type).placeholder ?? ""}
+                  />
+                </label>
+              )}
               <label className="block">
                 <span className="text-gray-400 block mb-1">Priority</span>
                 <input
@@ -740,7 +801,7 @@ export default function Queue({ setError }) {
               <button type="button" onClick={() => setShowAdd(false)} className="btn-secondary">
                 Cancel
               </button>
-              <button type="button" onClick={addJob} className="btn-primary">
+              <button type="button" onClick={addJob} className="btn-primary" disabled={!isJobTypeImplemented(addForm.job_type)}>
                 Add
               </button>
             </div>

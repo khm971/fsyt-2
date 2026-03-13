@@ -75,7 +75,7 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
             now,
             scheduler_entry_id,
         )
-        await broadcast_queue_update()
+        await broadcast_queue_update(updated_job_id=job_queue_id)
         await log_event(
             f"Scheduler queued job: entry {name!r} (id={scheduler_entry_id}) -> job_queue_id={job_queue_id}, job_type={entry['job_type']!r}",
             SEVERITY_NOTICE,
@@ -114,7 +114,7 @@ async def run_entry_now(scheduler_entry_id: int) -> dict | None:
         now,
         scheduler_entry_id,
     )
-    await broadcast_queue_update()
+    await broadcast_queue_update(updated_job_id=job_queue_id)
     await log_event(
         f"Scheduler entry run manually: {name!r} (id={scheduler_entry_id}) -> job_queue_id={job_queue_id}, job_type={entry['job_type']!r}",
         SEVERITY_INFO,

@@ -78,7 +78,7 @@ async def run_job_loop() -> None:
             print(f"[Job {job_id}] Started: {job_type} (video_id={vid}, channel_id={cid}, parameter={param!r})")
             await log_event(f"Job {job_id} started: {job_type} (video_id={vid}, channel_id={cid})", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
             await db_helpers.update_job_status(row["job_queue_id"], "running")
-            await broadcast_queue_update()
+            await broadcast_queue_update(updated_job_id=row["job_queue_id"])
 
             success = True
             message = None
@@ -275,7 +275,7 @@ async def run_job_loop() -> None:
                     extra.append(f"channel_id={cid}")
                 suffix = " (" + ", ".join(extra) + ")" if extra else ""
                 await log_event(f"Job {job_id} failed: {job_type} — {message or 'Error'}{suffix}", sev, job_id=job_id, video_id=vid, channel_id=cid)
-            await broadcast_queue_update()
+            await broadcast_queue_update(updated_job_id=job_id)
             # Notify UI to refresh video list when a video-affecting job finished
             if row.get("video_id") and job_type in ("download_video", "get_metadata"):
                 await broadcast_video_updated(row["video_id"])
@@ -295,7 +295,7 @@ async def run_job_loop() -> None:
             await log_event(f"{msg}{suffix}", SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid)
             if job_id is not None:
                 await db_helpers.mark_job_done_exception(job_id, str(e)[:500], is_error=True)
-                await broadcast_queue_update()
+                await broadcast_queue_update(updated_job_id=job_id)
 
 
 async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id: int | None = None) -> str | None:
@@ -530,9 +530,38 @@ async def broadcast_transcode_status_changed() -> None:
     await ws_manager.broadcast({"type": "transcode_status_changed"})
 
 
-async def broadcast_queue_update() -> None:
-    total_row = await db.fetchrow("SELECT COUNT(*) AS total FROM job_queue")
-    total_count = int(total_row["total"] or 0)
+def _job_row_to_dict(r) -> dict:
+    """Build the same job dict shape as in queue_update.jobs for a single row."""
+    return {
+        "job_queue_id": r["job_queue_id"],
+        "record_created": r["record_created"].isoformat() if r["record_created"] else None,
+        "job_type": r["job_type"],
+        "video_id": r["video_id"],
+        "channel_id": r["channel_id"],
+        "status": r["status"],
+        "status_percent_complete": r["status_percent_complete"],
+        "status_message": r["status_message"],
+        "last_update": r["last_update"].isoformat() if r["last_update"] else None,
+        "completed_flag": r["completed_flag"],
+        "warning_flag": r["warning_flag"],
+        "error_flag": r["error_flag"],
+        "acknowledge_flag": r["acknowledge_flag"],
+        "priority": r["priority"],
+        "run_after": r["run_after"].isoformat() if r.get("run_after") else None,
+        "scheduler_entry_id": r.get("scheduler_entry_id"),
+    }
+
+
+async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
+    counts_row = await db.fetchrow(
+        """SELECT COUNT(*) AS total,
+                  count(*) FILTER (WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())) AS runnable_count,
+                  count(*) FILTER (WHERE status NOT IN ('new', 'done', 'cancelled')) AS running_count
+           FROM job_queue"""
+    )
+    total_count = int(counts_row["total"] or 0)
+    runnable_count = int(counts_row["runnable_count"] or 0)
+    running_count = int(counts_row["running_count"] or 0)
     multi_row = await db.fetchrow(
         """SELECT COUNT(*) AS n FROM backend_instances
            WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
@@ -581,12 +610,31 @@ async def broadcast_queue_update() -> None:
         }
         for r in rows
     ]
+    running_job_row = await db.fetchrow(
+        """SELECT job_queue_id, job_type, status_percent_complete, video_id
+           FROM job_queue
+           WHERE status NOT IN ('new', 'done', 'cancelled')
+           ORDER BY last_update DESC NULLS LAST LIMIT 1"""
+    )
+    running_job = (
+        {
+            "job_queue_id": running_job_row["job_queue_id"],
+            "job_type": running_job_row["job_type"],
+            "status_percent_complete": running_job_row["status_percent_complete"],
+            "video_id": running_job_row["video_id"],
+        }
+        if running_job_row
+        else None
+    )
     heartbeat = await db_helpers.get_control_value("server_heartbeat")
     queue_paused = await db_helpers.get_control_bool("queue_paused")
     payload = {
         "type": "queue_update",
         "jobs": jobs,
         "total_count": total_count,
+        "runnable_count": runnable_count,
+        "running_count": running_count,
+        "running_job": running_job,
         "heartbeat": heartbeat,
         "multiple_instances": multiple_instances,
         "queue_paused": queue_paused,
@@ -594,3 +642,14 @@ async def broadcast_queue_update() -> None:
     if backend_instances_list:
         payload["backend_instances"] = backend_instances_list
     await ws_manager.broadcast(payload)
+    if updated_job_id is not None:
+        row = await db.fetchrow(
+            """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
+                      parameter, extended_parameters, status, status_percent_complete, status_message,
+                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
+                      run_after, priority, scheduler_entry_id
+               FROM job_queue WHERE job_queue_id = $1""",
+            updated_job_id,
+        )
+        if row:
+            await ws_manager.broadcast({"type": "job_updated", "job": _job_row_to_dict(row)})

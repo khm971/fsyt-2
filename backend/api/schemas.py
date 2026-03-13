@@ -125,6 +125,11 @@ class VideoResponse(VideoBase):
         from_attributes = True
 
 
+class VideoListResponse(BaseModel):
+    videos: list[VideoResponse]
+    total: int
+
+
 # ----- Job queue -----
 class JobQueueCreate(BaseModel):
     job_type: str
@@ -177,6 +182,7 @@ class JobQueueSummaryResponse(BaseModel):
     running: list[JobQueueResponse]
     running_count: int
     queued_count: int
+    runnable_count: int
     total_count: int
     errors_count: int
     warnings_count: int

@@ -48,6 +48,7 @@ export default function Watch({ setError }) {
         const list = await api.videos.listByTags({
           tag_ids: selectedTags.map((t) => t.tag_id),
           tag_match: tagMatchMode,
+          include_unavailable: includeUnavailableInSearch,
         });
         setVideos(list);
       }
@@ -162,7 +163,7 @@ export default function Watch({ setError }) {
               Clear search
             </button>
           )}
-          {isFreeFormSearchMode && (
+          {(isFreeFormSearchMode || isByTagsMode) && (
             <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
               <input
                 type="checkbox"

@@ -63,6 +63,7 @@ export const api = {
         params.tag_ids.forEach((id) => q.append("tag_ids", id));
       }
       if (params.tag_match != null) q.set("tag_match", params.tag_match);
+      if (params.include_unavailable != null) q.set("include_unavailable", params.include_unavailable);
       if (params.limit != null) q.set("limit", params.limit);
       const query = q.toString();
       return apiFetch(`/videos/by-tags${query ? `?${query}` : ""}`);
@@ -80,6 +81,7 @@ export const api = {
       if (params.channel_id != null) q.set("channel_id", params.channel_id);
       if (params.include_ignored != null) q.set("include_ignored", params.include_ignored);
       if (params.limit != null) q.set("limit", params.limit);
+      if (params.offset != null) q.set("offset", params.offset);
       if (params.sort_by != null) q.set("sort_by", params.sort_by);
       if (params.sort_order != null) q.set("sort_order", params.sort_order);
       const query = q.toString();
@@ -117,6 +119,8 @@ export const api = {
       if (params.scheduler_entry_id != null) q.set("scheduler_entry_id", params.scheduler_entry_id);
       if (params.limit != null) q.set("limit", params.limit);
       if (params.offset != null) q.set("offset", params.offset);
+      if (params.sort_by != null) q.set("sort_by", params.sort_by);
+      if (params.sort_order != null) q.set("sort_order", params.sort_order);
       const query = q.toString();
       return apiFetch(`/queue${query ? `?${query}` : ""}`);
     },

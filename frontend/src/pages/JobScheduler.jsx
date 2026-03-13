@@ -7,43 +7,16 @@ import Modal from "../components/Modal";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import ScheduleBuilder, { cronToDescription } from "../components/ScheduleBuilder";
-
-const JOB_TYPES = [
-  "download_video",
-  "get_metadata",
-  "fill_missing_metadata",
-  "queue_all_downloads",
-  "download_channel_artwork",
-  "download_one_channel",
-  "download_auto_enabled_channels",
-  "update_channel_info",
-  "add_video_from_frontend",
-  "add_video_from_playlist",
-  "transcode_video_for_ipad",
-  "trim_job_queue",
-];
-
-function jobTypeNeedsVideoId(jobType) {
-  return ["download_video", "get_metadata", "transcode_video_for_ipad"].includes(jobType);
-}
-
-function jobTypeNeedsChannelId(jobType) {
-  return [
-    "download_channel_artwork",
-    "download_one_channel",
-    "update_channel_info",
-  ].includes(jobType);
-}
-
-function jobTypeNeedsParameter(jobType) {
-  return [
-    "fill_missing_metadata",
-    "download_one_channel",
-    "add_video_from_frontend",
-    "add_video_from_playlist",
-    "trim_job_queue",
-  ].includes(jobType);
-}
+import {
+  JOB_TYPES,
+  jobTypeUsesVideoId,
+  jobTypeUsesChannelId,
+  getVideoIdRequirement,
+  getChannelIdRequirement,
+  getParameterConfig,
+  isJobTypeImplemented,
+  validateJobParams,
+} from "../lib/jobTypes";
 
 const emptyForm = () => ({
   name: "",
@@ -135,12 +108,14 @@ export default function JobScheduler({ setError }) {
       toast.addToast("Name is required", "error");
       return;
     }
-    if (form.job_type === "trim_job_queue") {
-      const age = parseInt(form.parameter, 10);
-      if (Number.isNaN(age) || age < 3) {
-        toast.addToast("Age (days) must be at least 3", "error");
-        return;
-      }
+    const paramErr = validateJobParams(form.job_type, {
+      video_id: form.video_id,
+      channel_id: form.channel_id,
+      parameter: form.parameter,
+    });
+    if (paramErr) {
+      toast.addToast(paramErr, "error");
+      return;
     }
     setSaving(true);
     try {
@@ -192,6 +167,10 @@ export default function JobScheduler({ setError }) {
   };
 
   const runNowClick = async (entry) => {
+    if (!isJobTypeImplemented(entry.job_type)) {
+      toast.addToast("This job type is not implemented yet.", "error");
+      return;
+    }
     const id = entry.scheduler_entry_id;
     setRunNowEntryId(id);
     try {
@@ -359,14 +338,19 @@ export default function JobScheduler({ setError }) {
                 ))}
               </select>
             </label>
+            {!isJobTypeImplemented(form.job_type) && (
+              <p className="text-amber-400 text-sm">This job type is not implemented yet.</p>
+            )}
             <ScheduleBuilder
               cron={form.cron_expression}
               onChange={(c) => setForm({ ...form, cron_expression: c })}
               disabled={saving}
             />
-            {jobTypeNeedsVideoId(form.job_type) && (
+            {jobTypeUsesVideoId(form.job_type) && (
               <label className="block">
-                <span className="text-gray-400 block mb-1">Video ID</span>
+                <span className="text-gray-400 block mb-1">
+                  Video ID ({getVideoIdRequirement(form.job_type) === "required" ? "required" : "optional"})
+                </span>
                 <select
                   value={String(form.video_id)}
                   onChange={(e) => setForm({ ...form, video_id: e.target.value })}
@@ -381,9 +365,11 @@ export default function JobScheduler({ setError }) {
                 </select>
               </label>
             )}
-            {jobTypeNeedsChannelId(form.job_type) && (
+            {jobTypeUsesChannelId(form.job_type) && (
               <label className="block">
-                <span className="text-gray-400 block mb-1">Channel</span>
+                <span className="text-gray-400 block mb-1">
+                  Channel ({getChannelIdRequirement(form.job_type) === "required" ? "required" : "optional"})
+                </span>
                 <select
                   value={String(form.channel_id)}
                   onChange={(e) => setForm({ ...form, channel_id: e.target.value })}
@@ -398,22 +384,19 @@ export default function JobScheduler({ setError }) {
                 </select>
               </label>
             )}
-            {jobTypeNeedsParameter(form.job_type) && (
+            {getParameterConfig(form.job_type) && (
               <label className="block">
                 <span className="text-gray-400 block mb-1">
-                  {["add_video_from_frontend", "add_video_from_playlist"].includes(form.job_type)
-                    ? "YouTube URL or video ID"
-                    : form.job_type === "trim_job_queue"
-                      ? "Age (days)"
-                      : "Parameter"}
+                  {getParameterConfig(form.job_type).label}
+                  {getParameterConfig(form.job_type).required ? " (required)" : " (optional)"}
                 </span>
                 <input
-                  type={form.job_type === "trim_job_queue" ? "number" : "text"}
-                  min={form.job_type === "trim_job_queue" ? 3 : undefined}
+                  type={getParameterConfig(form.job_type).inputType === "number" ? "number" : "text"}
+                  min={getParameterConfig(form.job_type).min}
                   value={form.parameter}
                   onChange={(e) => setForm({ ...form, parameter: e.target.value })}
                   className="input w-full"
-                  placeholder={form.job_type === "fill_missing_metadata" ? "Max videos (optional)" : form.job_type === "trim_job_queue" ? "e.g. 7" : ""}
+                  placeholder={getParameterConfig(form.job_type).placeholder ?? ""}
                 />
               </label>
             )}
@@ -439,7 +422,7 @@ export default function JobScheduler({ setError }) {
               <button type="button" onClick={() => setShowForm(false)} disabled={saving} className="btn-secondary">
                 Cancel
               </button>
-              <button type="button" onClick={saveForm} disabled={saving} className="btn-primary">
+              <button type="button" onClick={saveForm} disabled={saving || !isJobTypeImplemented(form.job_type)} className="btn-primary">
                 {saving ? "Saving…" : editingId != null ? "Update" : "Create"}
               </button>
             </div>

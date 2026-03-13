@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
 import { cn, formatSmartTime } from "../lib/utils";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { PaginationBar } from "../components/PaginationBar";
 
 const PAGE_SIZE = 200;
 const SEVERITY_COLORS = {
@@ -61,8 +61,6 @@ export default function Log({ setError }) {
   };
 
   const totalPages = Math.ceil(data.total / PAGE_SIZE) || 1;
-  const canPrev = page > 0;
-  const canNext = page < totalPages - 1;
 
   if (loading && data.entries.length === 0) {
     return <div className="text-gray-400 py-8">Loading...</div>;
@@ -87,6 +85,18 @@ export default function Log({ setError }) {
           Include low-level messages
         </label>
       </div>
+
+      {data.total > 0 && (
+        <PaginationBar
+          page={page + 1}
+          totalPages={totalPages}
+          total={data.total}
+          pageSize={PAGE_SIZE}
+          itemLabel="entries"
+          onPageChange={(p) => setPage(p - 1)}
+          disabled={loading}
+        />
+      )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
         <div className="overflow-x-hidden">
@@ -165,34 +175,17 @@ export default function Log({ setError }) {
           </table>
         </div>
 
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800 text-gray-400 text-sm">
-          <span>
-            {data.entries.length === 0
-              ? `Showing 0 of ${data.total}`
-              : `Showing ${data.offset + 1}–${data.offset + data.entries.length} of ${data.total}`}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={!canPrev || loading}
-              className="p-1 rounded hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <span>
-              Page {page + 1} of {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={!canNext || loading}
-              className="p-1 rounded hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
+        {data.total > 0 && (
+          <PaginationBar
+            page={page + 1}
+            totalPages={totalPages}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+            itemLabel="entries"
+            onPageChange={(p) => setPage(p - 1)}
+            disabled={loading}
+          />
+        )}
       </div>
     </div>
   );

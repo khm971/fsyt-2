@@ -10,14 +10,19 @@ function isInProgress(status) {
 
 function summaryFromJobs(jobsList) {
   const list = jobsList || [];
+  const now = new Date();
   const running = list.filter((j) => isInProgress(j.status));
   const queued = list.filter((j) => j.status === "new");
+  const runnable = list.filter(
+    (j) => j.status === "new" && (!j.run_after || new Date(j.run_after) <= now)
+  );
   const errors = list.filter((j) => j.error_flag && !j.acknowledge_flag);
   const warnings = list.filter((j) => j.warning_flag && !j.acknowledge_flag);
   return {
     running,
     running_count: running.length,
     queued_count: queued.length,
+    runnable_count: runnable.length,
     total_count: list.length,
     errors_count: errors.length,
     warnings_count: warnings.length,
@@ -37,6 +42,7 @@ export function QueueWebSocketProvider({ children }) {
   const [transcodeStatusChangedAt, setTranscodeStatusChangedAt] = useState(0);
   const [transcodeProgress, setTranscodeProgress] = useState(null);
   const [videoProgressOverrides, setVideoProgressOverrides] = useState({});
+  const [jobOverrides, setJobOverrides] = useState(() => ({}));
   const [serverHeartbeat, setServerHeartbeat] = useState(null);
   const [reconnectedAt, setReconnectedAt] = useState(0);
   const [multipleInstances, setMultipleInstances] = useState(false);
@@ -86,10 +92,23 @@ export function QueueWebSocketProvider({ children }) {
             jobsRef.current = msg.jobs;
             setJobs(msg.jobs);
             setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
+            const summary = summaryFromJobs(msg.jobs);
+            if (typeof msg.total_count === "number") summary.total_count = msg.total_count;
+            if (typeof msg.runnable_count === "number") summary.runnable_count = msg.runnable_count;
+            if (typeof msg.running_count === "number") summary.running_count = msg.running_count;
+            if (msg.running_job !== undefined) summary.running_job = msg.running_job;
+            setQueueSummary(summary);
+          } else {
+            setQueueSummary((prev) => {
+              if (!prev) return prev;
+              const next = { ...prev };
+              if (typeof msg.total_count === "number") next.total_count = msg.total_count;
+              if (typeof msg.runnable_count === "number") next.runnable_count = msg.runnable_count;
+              if (typeof msg.running_count === "number") next.running_count = msg.running_count;
+              if (msg.running_job !== undefined) next.running_job = msg.running_job;
+              return next;
+            });
           }
-          const summary = summaryFromJobs(msg.jobs);
-          if (typeof msg.total_count === "number") summary.total_count = msg.total_count;
-          setQueueSummary(summary);
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
           if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
@@ -130,6 +149,9 @@ export function QueueWebSocketProvider({ children }) {
             },
           }));
         }
+        if (msg.type === "job_updated" && msg.job?.job_queue_id != null) {
+          setJobOverrides((prev) => ({ ...prev, [msg.job.job_queue_id]: msg.job }));
+        }
       } catch (_) {}
     };
   }, []);
@@ -167,6 +189,7 @@ export function QueueWebSocketProvider({ children }) {
             running: res.running ?? [],
             running_count: res.running_count ?? 0,
             queued_count: res.queued_count ?? 0,
+            runnable_count: res.runnable_count ?? 0,
             total_count: res.total_count ?? 0,
             errors_count: res.errors_count ?? 0,
             warnings_count: res.warnings_count ?? 0,
@@ -193,6 +216,7 @@ export function QueueWebSocketProvider({ children }) {
     transcodeStatusChangedAt,
     transcodeProgress,
     videoProgressOverrides,
+    jobOverrides,
     serverHeartbeat,
     reconnectedAt,
     multipleInstances,
