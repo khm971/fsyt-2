@@ -184,6 +184,8 @@ export const api = {
       if (params.offset != null) q.set("offset", params.offset);
       if (params.video_id != null) q.set("video_id", params.video_id);
       if (params.min_severity != null) q.set("min_severity", params.min_severity);
+      if (params.sort_by != null) q.set("sort_by", params.sort_by);
+      if (params.sort_order != null) q.set("sort_order", params.sort_order);
       const query = q.toString();
       return apiFetch(`/log${query ? `?${query}` : ""}`);
     },

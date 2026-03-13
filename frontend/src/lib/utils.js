@@ -48,6 +48,29 @@ export function formatDurationSeconds(seconds) {
 }
 
 /**
+ * Total seconds to friendly text: "1 hour", "1 hour and 1 minute", "1 hour, 1 minute and 6 seconds".
+ * Singular/plural: 1 hour / 2 hours, 1 minute / 2 minutes, 1 second / 6 seconds.
+ * Returns "—" for null/invalid or negative.
+ */
+export function formatSecondsToFriendlyDuration(seconds) {
+  if (seconds == null || seconds === "" || Number.isNaN(Number(seconds)) || Number(seconds) < 0) {
+    return "—";
+  }
+  const s = Math.floor(Number(seconds));
+  if (s === 0) return "0 seconds";
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const parts = [];
+  if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+  if (m > 0) parts.push(`${m} ${m === 1 ? "minute" : "minutes"}`);
+  if (sec > 0) parts.push(`${sec} ${sec === 1 ? "second" : "seconds"}`);
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts[0]}, ${parts[1]} and ${parts[2]}`;
+}
+
+/**
  * For Last heartbeat: today = time with seconds (e.g. "3:45:32 PM");
  * otherwise full date + time with seconds (e.g. "Mar 5, 2025, 3:45:32 PM").
  */

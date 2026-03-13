@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import { formatDateTime } from "../lib/utils";
+import { formatDateTime, formatSecondsToFriendlyDuration } from "../lib/utils";
+
+const SECONDS_CONTROL_KEYS = new Set([
+  "download_scheduler_min_delay",
+  "download_scheduler_max_delay",
+]);
 
 function isBoolean(val) {
   return val === "true" || val === "false";
@@ -142,21 +147,28 @@ export default function ControlValuesPanel({ setError }) {
                     <div className="absolute left-0.5 top-1 bg-white w-3.5 h-3.5 rounded-full transition-all peer-checked:translate-x-4" />
                   </label>
                 ) : isNum ? (
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9.-]*"
-                    value={displayVal}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      if (nextValue === "" || /^-?\d*\.?\d*$/.test(nextValue)) {
-                        handleControlChange(key, nextValue);
-                      }
-                    }}
-                    onBlur={() => handleControlSave(key)}
-                    onKeyDown={(e) => e.key === "Enter" && handleControlSave(key)}
-                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono w-24 focus:border-blue-500 focus:outline-none"
-                  />
+                  <>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9.-]*"
+                      value={displayVal}
+                      onChange={(e) => {
+                        const nextValue = e.target.value;
+                        if (nextValue === "" || /^-?\d*\.?\d*$/.test(nextValue)) {
+                          handleControlChange(key, nextValue);
+                        }
+                      }}
+                      onBlur={() => handleControlSave(key)}
+                      onKeyDown={(e) => e.key === "Enter" && handleControlSave(key)}
+                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono w-24 focus:border-blue-500 focus:outline-none"
+                    />
+                    {SECONDS_CONTROL_KEYS.has(key) && (
+                      <span className="text-gray-500 text-sm shrink-0">
+                        {formatSecondsToFriendlyDuration(displayVal)}
+                      </span>
+                    )}
+                  </>
                 ) : (
                   <input
                     type="text"

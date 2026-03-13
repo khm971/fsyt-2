@@ -476,9 +476,25 @@ export default function Queue({ setError }) {
                   !j.acknowledge_flag && !j.error_flag && j.warning_flag && "bg-yellow-950/25"
                 )}
               >
-                <td className="px-4 py-2 font-mono text-gray-300">{j.job_queue_id}</td>
+                <td className="px-4 py-2 font-mono text-gray-300">
+                  <button
+                    type="button"
+                    onClick={() => setJobQueueIdForModal(j.job_queue_id)}
+                    className="text-left hover:text-blue-400"
+                  >
+                    {j.job_queue_id}
+                  </button>
+                </td>
                 <td className="px-4 py-2 font-mono text-gray-400">{j.priority ?? "—"}</td>
-                <td className="px-4 py-2 text-white">{j.job_type}</td>
+                <td className="px-4 py-2 text-white">
+                  <button
+                    type="button"
+                    onClick={() => setJobQueueIdForModal(j.job_queue_id)}
+                    className="text-left hover:text-blue-400"
+                  >
+                    {j.job_type}
+                  </button>
+                </td>
                 <td className="px-4 py-2 font-mono">
                   {j.video_id != null ? (
                     <Tooltip title="Video details" side="top" wrap>
@@ -501,15 +517,16 @@ export default function Queue({ setError }) {
                         className={cn(
                           "inline-block",
                           (() => {
-                            const displayStatus = j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
-                              ? videoProgressOverrides[j.video_id].status
-                              : j.status;
-                            return (
-                              (displayStatus === "done" && "text-green-400") ||
-                              (displayStatus === "running" && "text-blue-400") ||
-                              (displayStatus === "error" && "text-red-400") ||
-                              (displayStatus === "new" && "text-gray-400")
-                            );
+                            const displayStatus =
+                              j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
+                                ? videoProgressOverrides[j.video_id].status
+                                : j.status;
+                            if (displayStatus === "done") return "text-green-400";
+                            if (displayStatus === "new") return "text-blue-400";
+                            if (displayStatus === "error") return "text-red-400";
+                            if (displayStatus === "cancelled") return "text-white";
+                            // Any other non-terminal state (running and all derived sub-states)
+                            return "text-fuchsia-400";
                           })()
                         )}
                       >
@@ -592,15 +609,6 @@ export default function Queue({ setError }) {
                   </div>
                 </td>
                 <td className="px-4 py-2 flex gap-1 flex-nowrap">
-                  <Tooltip title="Job details" side="top">
-                    <button
-                      type="button"
-                      onClick={() => setJobQueueIdForModal(j.job_queue_id)}
-                      className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded"
-                    >
-                      <Search className="w-4 h-4" />
-                    </button>
-                  </Tooltip>
                   {(j.error_flag || j.warning_flag) && (
                     <Tooltip title={j.acknowledge_flag ? "Unacknowledge" : "Acknowledge"} side="top">
                       <button

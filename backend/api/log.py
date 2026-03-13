@@ -27,8 +27,10 @@ async def list_log(
     offset: int = Query(0, ge=0),
     video_id: int | None = Query(None, description="Filter by video_id (e.g. for transcode logs)"),
     min_severity: int | None = Query(None, description="Minimum severity (e.g. 10 to exclude Low_Level)"),
+    sort_by: str = Query("time", pattern="^(time|job_id|video_id|channel_id|severity|message)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
-    """List log entries, newest first. Supports pagination. Use video_id to filter transcode logs."""
+    """List log entries, sortable with pagination. Use video_id to filter transcode logs."""
     conditions = []
     params = []
     i = 1
@@ -41,12 +43,34 @@ async def list_log(
         params.append(min_severity)
         i += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Map sort_by to actual column names, keeping a strict whitelist.
+    if sort_by == "time":
+        sort_col = "event_time"
+    elif sort_by == "job_id":
+        sort_col = "job_id"
+    elif sort_by == "video_id":
+        sort_col = "video_id"
+    elif sort_by == "channel_id":
+        sort_col = "channel_id"
+    elif sort_by == "severity":
+        sort_col = "severity"
+    elif sort_by == "message":
+        sort_col = "message"
+    else:
+        sort_col = "event_time"
+
+    direction = "ASC" if sort_order == "asc" else "DESC"
+    nulls_last_cols = {"job_id", "video_id", "channel_id"}
+    nulls_clause = " NULLS LAST" if sort_col in nulls_last_cols else ""
+    order_clause = f"ORDER BY {sort_col} {direction}{nulls_clause}, event_log_id {direction}"
+
     params.extend([limit, offset])
     rows = await db.fetch(
         f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id, subsystem
             FROM event_log
             {where}
-            ORDER BY event_time DESC
+            {order_clause}
             LIMIT ${i} OFFSET ${i + 1}""",
         *params,
     )
