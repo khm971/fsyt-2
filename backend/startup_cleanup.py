@@ -74,16 +74,18 @@ async def run_startup_cleanup() -> None:
 
     # 2. Video: downloading / get_metadata_for_download → no_metadata
     video_rows = await db.fetch(
-        """SELECT video_id, status FROM video
+        """SELECT video_id, channel_id, status FROM video
            WHERE status IN ('downloading', 'get_metadata_for_download')"""
     )
     for r in video_rows:
         video_id = r["video_id"]
+        channel_id = r.get("channel_id")
         old_status = r["status"]
         await log_event(
             f"Inconsistent video on startup: video_id={video_id} status={old_status!r} → no_metadata",
             SEVERITY_WARNING,
             video_id=video_id,
+            channel_id=channel_id,
         )
         await db.execute(
             "UPDATE video SET status = 'no_metadata', status_message = NULL WHERE video_id = $1",
@@ -93,6 +95,7 @@ async def run_startup_cleanup() -> None:
             f"Startup cleanup: video {video_id} set to no_metadata",
             SEVERITY_DEBUG,
             video_id=video_id,
+            channel_id=channel_id,
         )
 
     # 3. Temp files: remove contents of temp_downloads (same path as download_service)

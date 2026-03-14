@@ -192,6 +192,7 @@ export const api = {
   },
 
   log: {
+    get: (id) => apiFetch(`/log/${id}`),
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.limit != null) q.set("limit", params.limit);

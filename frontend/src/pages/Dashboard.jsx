@@ -7,6 +7,9 @@ import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatSch
 import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
+import { VideoDetailsModal } from "../components/VideoDetailsModal";
+import { ChannelEditModal } from "../components/ChannelEditModal";
+import { LogEntryDetailsModal } from "../components/LogEntryDetailsModal";
 
 const SEVERITY_COLORS = {
   5: "text-gray-500",
@@ -27,6 +30,9 @@ export default function Dashboard({ setError }) {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
+  const [videoIdForModal, setVideoIdForModal] = useState(null);
+  const [channelIdForModal, setChannelIdForModal] = useState(null);
+  const [eventLogIdForModal, setEventLogIdForModal] = useState(null);
   const queueRefreshTriggeredRef = useRef(false);
   const { queueSummary, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshSummary } = useQueueWebSocket();
 
@@ -419,9 +425,13 @@ export default function Dashboard({ setError }) {
             logEntries.map((e) => (
               <div
                 key={e.event_log_id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setEventLogIdForModal(e.event_log_id)}
+                onKeyDown={(ev) => ev.key === "Enter" && setEventLogIdForModal(e.event_log_id)}
                 title={`Severity: ${e.severity}, Job ID: ${e.job_id ?? "—"}, Video ID: ${e.video_id ?? "—"}, Channel ID: ${e.channel_id ?? "—"}`}
                 className={cn(
-                  "flex gap-2 truncate items-center",
+                  "flex gap-2 truncate items-center cursor-pointer rounded px-1 -mx-1 hover:bg-gray-800/50",
                   e.message === "Application starting, database connected"
                     ? "text-green-400"
                     : SEVERITY_COLORS[e.severity] ?? "text-gray-300"
@@ -430,13 +440,16 @@ export default function Dashboard({ setError }) {
                 <span className="text-gray-500 shrink-0">
                   {formatSmartTime(e.event_time)}
                 </span>
-                <span className="truncate flex-1">{e.message}</span>
+                <span className="truncate flex-1 min-w-0">{e.message}</span>
                 {e.acknowledged ? (
                   <span className="text-green-500 text-xs shrink-0">Acked</span>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => handleAck(e.event_log_id)}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      handleAck(e.event_log_id);
+                    }}
                     className="text-blue-400 hover:text-blue-300 text-xs shrink-0"
                   >
                     Ack
@@ -448,11 +461,35 @@ export default function Dashboard({ setError }) {
         </div>
       </div>
 
+      {eventLogIdForModal != null && (
+        <LogEntryDetailsModal
+          eventLogId={eventLogIdForModal}
+          onClose={() => setEventLogIdForModal(null)}
+          setError={setError}
+          toast={toast}
+          onOpenJob={(id) => setJobQueueIdForModal(id)}
+          onOpenVideo={(id) => setVideoIdForModal(id)}
+          onOpenChannel={(id) => setChannelIdForModal(id)}
+        />
+      )}
       <JobDetailsModal
         jobId={jobQueueIdForModal}
         onClose={() => setJobQueueIdForModal(null)}
         setError={setError}
         toast={toast}
+      />
+      <VideoDetailsModal
+        videoId={videoIdForModal}
+        onClose={() => setVideoIdForModal(null)}
+        setError={setError}
+        toast={toast}
+        onOpenJobDetails={(jobId) => setJobQueueIdForModal(jobId)}
+        onOpenChannelEdit={(channelId) => setChannelIdForModal(channelId)}
+      />
+      <ChannelEditModal
+        channelId={channelIdForModal}
+        onClose={() => setChannelIdForModal(null)}
+        setError={setError}
       />
     </div>
   );

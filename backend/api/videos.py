@@ -320,10 +320,12 @@ def _build_ffmpeg_hls_args(full_path: str, out_dir: str) -> list[str]:
     ]
 
 
-async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int) -> None:
+async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int, channel_id: int | None = None) -> None:
     """Read ffmpeg stderr line by line and log to event_log and console."""
     if not proc.stderr:
         return
+    if channel_id is None and video_id is not None:
+        channel_id = await db.fetchval("SELECT channel_id FROM video WHERE video_id = $1", video_id)
     try:
         while True:
             line = await proc.stderr.readline()
@@ -333,19 +335,20 @@ async def _read_and_log_stderr(proc: asyncio.subprocess.Process, video_id: int) 
             if not text:
                 continue
             severity = SEVERITY_ERROR if "error" in text.lower() else SEVERITY_LOW_LEVEL
-            await log_event(f"[ffmpeg] video_id={video_id}: {text}", severity, video_id=video_id)
+            await log_event(f"[ffmpeg] video_id={video_id}: {text}", severity, video_id=video_id, channel_id=channel_id)
             if severity != SEVERITY_LOW_LEVEL:
                 print(f"[ffmpeg video_id={video_id}] {text}", flush=True)
     except Exception as e:
-        await log_event(f"[ffmpeg] video_id={video_id}: stderr read error: {type(e).__name__}: {e}", SEVERITY_ERROR, video_id=video_id)
+        await log_event(f"[ffmpeg] video_id={video_id}: stderr read error: {type(e).__name__}: {e}", SEVERITY_ERROR, video_id=video_id, channel_id=channel_id)
         print(f"[ffmpeg video_id={video_id}] stderr read error: {e}", flush=True)
 
 
 async def _transcode_stream(full_path: str, video_id: int):
     """Yield chunks from ffmpeg transcoding input to H.264/AAC for iPad compatibility."""
+    channel_id = await db.fetchval("SELECT channel_id FROM video WHERE video_id = $1", video_id)
     args = _build_ffmpeg_args(full_path)
     cmd_str = shlex.join(args)
-    await log_event(f"[ffmpeg] video_id={video_id}: command {cmd_str}", SEVERITY_INFO, video_id=video_id)
+    await log_event(f"[ffmpeg] video_id={video_id}: command {cmd_str}", SEVERITY_INFO, video_id=video_id, channel_id=channel_id)
     print(f"[ffmpeg video_id={video_id}] command: {cmd_str}", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
@@ -353,7 +356,7 @@ async def _transcode_stream(full_path: str, video_id: int):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id))
+    stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id, channel_id))
     try:
         while True:
             chunk = await proc.stdout.read(64 * 1024)
@@ -439,6 +442,7 @@ async def clear_all_hls_transcodes() -> dict[str, int]:
 async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
     """Start or reuse HLS transcode for video_id. Returns full path to output directory.
     Persists transcode_path to DB. Uses /media/_transcodes/{video_id}."""
+    channel_id = await db.fetchval("SELECT channel_id FROM video WHERE video_id = $1", video_id)
     out_dir, rel_path = _get_transcode_dir(video_id)
 
     async with _hls_lock:
@@ -466,7 +470,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
 
     args = _build_ffmpeg_hls_args(full_path, out_dir)
     cmd_str = shlex.join(args)
-    await log_event(f"[ffmpeg HLS] video_id={video_id}: {cmd_str}", SEVERITY_INFO, video_id=video_id)
+    await log_event(f"[ffmpeg HLS] video_id={video_id}: {cmd_str}", SEVERITY_INFO, video_id=video_id, channel_id=channel_id)
     print(f"[ffmpeg HLS video_id={video_id}] command: {cmd_str}", flush=True)
 
     proc = await asyncio.create_subprocess_exec(
@@ -474,7 +478,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
         stderr=asyncio.subprocess.PIPE,
     )
     entry["proc"] = proc
-    stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id))
+    stderr_task = asyncio.create_task(_read_and_log_stderr(proc, video_id, channel_id))
     await broadcast_transcode_status_changed()
 
     async def _wait_first_segment():
@@ -496,10 +500,10 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
                 rel_path,
                 video_id,
             )
-            await log_event(f"[ffmpeg HLS] video_id={video_id}: transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id)
+            await log_event(f"[ffmpeg HLS] video_id={video_id}: transcode complete, persisted: {rel_path}", SEVERITY_INFO, video_id=video_id, channel_id=channel_id)
         else:
             msg = f"[ffmpeg HLS] video_id={video_id}: transcode failed (exit {exit_code}), not persisted"
-            await log_event(msg, SEVERITY_ERROR, video_id=video_id)
+            await log_event(msg, SEVERITY_ERROR, video_id=video_id, channel_id=channel_id)
             print(f"[ffmpeg HLS video_id={video_id}] {msg}", flush=True)
             async with _hls_lock:
                 _hls_cache.pop(video_id, None)
@@ -515,6 +519,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
             f"HLS transcode failed: video_id={video_id} exit_code={proc.returncode} out_dir={out_dir}",
             SEVERITY_ERROR,
             video_id=video_id,
+            channel_id=channel_id,
         )
         raise HTTPException(500, "HLS transcode failed")
     if not os.path.isfile(playlist_path):
@@ -522,6 +527,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
             f"[ffmpeg HLS] video_id={video_id}: FFMPEG slow to start, waiting for playlist",
             SEVERITY_WARNING,
             video_id=video_id,
+            channel_id=channel_id,
         )
     for _ in range(90):
         if os.path.isfile(playlist_path):
@@ -531,6 +537,7 @@ async def _ensure_hls_transcode(video_id: int, full_path: str) -> str:
         f"HLS transcode timeout (playlist not ready): video_id={video_id} playlist_path={playlist_path}",
         SEVERITY_ERROR,
         video_id=video_id,
+        channel_id=channel_id,
     )
     raise HTTPException(503, "Transcode in progress, please retry shortly")
 
@@ -557,12 +564,15 @@ async def get_active_transcodes() -> list[dict]:
         return []
 
     durations = {}
+    channel_ids = {}
     if active_ids:
         rows = await db.fetch(
-            "SELECT video_id, duration FROM video WHERE video_id = ANY($1)",
+            "SELECT video_id, duration, channel_id FROM video WHERE video_id = ANY($1)",
             active_ids,
         )
-        durations = {r["video_id"]: r.get("duration") for r in rows}
+        for r in rows:
+            durations[r["video_id"]] = r.get("duration")
+            channel_ids[r["video_id"]] = r.get("channel_id")
 
     result = []
     for video_id in active_ids:
@@ -577,6 +587,7 @@ async def get_active_transcodes() -> list[dict]:
                     f"get_active_transcodes: listdir failed: video_id={video_id} out_dir={out_dir} error={type(e).__name__}: {e}",
                     SEVERITY_ERROR,
                     video_id=video_id,
+                    channel_id=channel_ids.get(video_id),
                 )
 
         duration = durations.get(video_id)
@@ -806,10 +817,12 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
         video_id,
         tag_id,
     )
+    channel_id = await db.fetchval("SELECT channel_id FROM video WHERE video_id = $1", video_id)
     await log_event(
         f"Tag attached to video: tag_id={tag_id}, video_id={video_id}",
         SEVERITY_DEBUG,
         video_id=video_id,
+        channel_id=channel_id,
     )
     rows = await db.fetch(
         """SELECT t.tag_id, t.user_id, t.title, t.bg_color, t.fg_color, t.icon_before, t.icon_after, t.is_system,
@@ -846,10 +859,12 @@ async def remove_video_tag(video_id: int, tag_id: int):
         video_id,
         tag_id,
     )
+    channel_id = await db.fetchval("SELECT channel_id FROM video WHERE video_id = $1", video_id)
     await log_event(
         f"Tag removed from video: tag_id={tag_id}, video_id={video_id}",
         SEVERITY_DEBUG,
         video_id=video_id,
+        channel_id=channel_id,
     )
 
 
@@ -927,6 +942,7 @@ async def create_video(body: VideoCreate):
                 f"Video tagged with Needs Review: video_id={row['video_id']}",
                 SEVERITY_INFO,
                 video_id=row["video_id"],
+                channel_id=row.get("channel_id"),
             )
     await broadcast_queue_update(updated_job_id=new_job_id)
     await log_event(f"Video created: {provider_key} (video_id={row['video_id']}, channel_id={channel_id})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
@@ -977,7 +993,7 @@ async def update_video(video_id: int, body: VideoUpdate):
 
 @router.delete("/{video_id}", status_code=204)
 async def delete_video(video_id: int):
-    r = await db.fetchrow("SELECT provider_key FROM video WHERE video_id = $1", video_id)
+    r = await db.fetchrow("SELECT provider_key, channel_id FROM video WHERE video_id = $1", video_id)
     await db.execute("DELETE FROM video WHERE video_id = $1", video_id)
     if r:
-        await log_event(f"Video deleted: {r['provider_key']} (video_id={video_id})", SEVERITY_INFO, video_id=video_id)
+        await log_event(f"Video deleted: {r['provider_key']} (video_id={video_id})", SEVERITY_INFO, video_id=video_id, channel_id=r.get("channel_id"))

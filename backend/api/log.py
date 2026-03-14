@@ -1,5 +1,5 @@
 """Event log REST API."""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 
 from database import db
 from log_helper import SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR, SEVERITY_CRITICAL
@@ -8,7 +8,7 @@ router = APIRouter(prefix="/log", tags=["log"])
 
 
 def row_to_log(r):
-    return {
+    out = {
         "event_log_id": r["event_log_id"],
         "event_time": r["event_time"].isoformat() if r["event_time"] else None,
         "message": r["message"],
@@ -19,6 +19,11 @@ def row_to_log(r):
         "channel_id": r.get("channel_id"),
         "subsystem": r.get("subsystem"),
     }
+    if "instance_id" in r and r["instance_id"] is not None:
+        out["instance_id"] = str(r["instance_id"])
+    if "hostname" in r and r["hostname"] is not None:
+        out["hostname"] = r["hostname"]
+    return out
 
 
 @router.get("")
@@ -116,6 +121,20 @@ async def recent_log(
         *params,
     )
     return [row_to_log(r) for r in rows]
+
+
+@router.get("/{event_log_id}")
+async def get_log_entry(event_log_id: int):
+    """Get a single log entry by id with all fields (including instance_id, hostname)."""
+    row = await db.fetchrow(
+        """SELECT event_log_id, event_time, message, severity, acknowledged,
+                  job_id, video_id, channel_id, subsystem, instance_id, hostname
+           FROM event_log WHERE event_log_id = $1""",
+        event_log_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Log entry not found")
+    return row_to_log(row)
 
 
 @router.patch("/{event_log_id}/acknowledge")

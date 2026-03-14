@@ -6,6 +6,7 @@ import { useToast } from "../context/ToastContext";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
+import { LogEntryDetailsModal } from "../components/LogEntryDetailsModal";
 import { ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 
@@ -42,6 +43,7 @@ export default function Log({ setError }) {
   const [jobIdForModal, setJobIdForModal] = useState(null);
   const [videoIdForModal, setVideoIdForModal] = useState(null);
   const [channelIdForModal, setChannelIdForModal] = useState(null);
+  const [eventLogIdForModal, setEventLogIdForModal] = useState(null);
   const [sortBy, setSortBy] = useState("time");
   const [sortOrder, setSortOrder] = useState("desc");
 
@@ -360,7 +362,13 @@ export default function Log({ setError }) {
               {data.entries.map((e) => (
                 <tr key={e.event_log_id} className="border-b border-gray-800/50">
                   <td className="px-4 py-2 text-gray-500 font-mono whitespace-nowrap">
-                    {formatSmartTime(e.event_time)}
+                    <button
+                      type="button"
+                      onClick={() => setEventLogIdForModal(e.event_log_id)}
+                      className="text-left hover:text-gray-300 rounded px-0.5 -mx-0.5 hover:bg-gray-800/50"
+                    >
+                      {formatSmartTime(e.event_time)}
+                    </button>
                   </td>
                   <td className="px-4 py-2 font-mono text-xs">
                     {e.job_id != null ? (
@@ -427,7 +435,13 @@ export default function Log({ setError }) {
                         : SEVERITY_COLORS[e.severity] ?? "text-gray-300"
                     )}
                   >
-                    {e.message}
+                    <button
+                      type="button"
+                      onClick={() => setEventLogIdForModal(e.event_log_id)}
+                      className="text-left w-full text-start rounded px-0.5 -mx-0.5 hover:bg-gray-800/50"
+                    >
+                      {e.message}
+                    </button>
                   </td>
                   <td className="px-4 py-2">
                     {e.acknowledged ? (
@@ -462,6 +476,25 @@ export default function Log({ setError }) {
         )}
       </div>
 
+      {eventLogIdForModal != null && (
+        <LogEntryDetailsModal
+          eventLogId={eventLogIdForModal}
+          onClose={() => setEventLogIdForModal(null)}
+          setError={setError}
+          toast={toast}
+          onOpenJob={(id) => setJobIdForModal(id)}
+          onOpenVideo={(id) => setVideoIdForModal(id)}
+          onOpenChannel={(id) => setChannelIdForModal(id)}
+          onAcknowledged={() => {
+            setData((prev) => ({
+              ...prev,
+              entries: prev.entries.map((ent) =>
+                ent.event_log_id === eventLogIdForModal ? { ...ent, acknowledged: true } : ent
+              ),
+            }));
+          }}
+        />
+      )}
       <VideoDetailsModal
         videoId={videoIdForModal}
         onClose={() => setVideoIdForModal(null)}

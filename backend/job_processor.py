@@ -4,6 +4,16 @@ import random
 from datetime import datetime, timedelta
 
 from database import db
+
+
+def _format_run_after(run_after) -> str | None:
+    """Format run_after for log messages: day-of-week abbreviation, date and time with seconds, no fractional seconds."""
+    if run_after is None:
+        return None
+    dt = run_after
+    if hasattr(dt, "replace") and hasattr(dt, "microsecond"):
+        dt = dt.replace(microsecond=0)
+    return dt.strftime("%a, %b %d, %Y %H:%M:%S")
 from websocket_manager import ws_manager
 from parse_video_id import parse_youtube_video_id
 import db_helpers
@@ -64,7 +74,7 @@ async def run_job_loop() -> None:
             )
             await ws_manager.broadcast({"type": "heartbeat", "value": heartbeat_value})
             row = await db.fetchrow(
-                """SELECT job_queue_id, job_type, video_id, channel_id, parameter
+                """SELECT job_queue_id, job_type, video_id, channel_id, parameter, run_after
                    FROM job_queue
                    WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())
                    ORDER BY priority DESC NULLS LAST, job_queue_id ASC
@@ -76,7 +86,11 @@ async def run_job_loop() -> None:
             job_type = row["job_type"]
             vid, cid, param = row.get("video_id"), row.get("channel_id"), row.get("parameter")
             print(f"[Job {job_id}] Started: {job_type} (video_id={vid}, channel_id={cid}, parameter={param!r})")
-            await log_event(f"Job {job_id} started: {job_type} (video_id={vid}, channel_id={cid})", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+            started_msg = f"Job {job_id} started: {job_type} (video_id={vid}, channel_id={cid})"
+            run_after_str = _format_run_after(row.get("run_after"))
+            if run_after_str:
+                started_msg += f"; scheduled to run after {run_after_str}"
+            await log_event(started_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
             await db_helpers.update_job_status(row["job_queue_id"], "running")
             await broadcast_queue_update(updated_job_id=row["job_queue_id"])
 
@@ -95,7 +109,7 @@ async def run_job_loop() -> None:
                             success, message, is_error = False, "Video not found", True
                         else:
                             if v.get("channel_id") is None:
-                                await log_event(f"Job {job_id} video {row['video_id']}: resolving channel for video", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"])
+                                await log_event(f"Job {job_id} video {row['video_id']}: resolving channel for video", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=row.get("channel_id"))
                                 ch_id, err = await db_helpers.resolve_channel_for_video(v["provider_key"])
                                 if ch_id:
                                     await db_helpers.update_video_channel_id(row["video_id"], ch_id)
@@ -263,7 +277,11 @@ async def run_job_loop() -> None:
                 if cid is not None:
                     extra.append(f"channel_id={cid}")
                 suffix = " (" + ", ".join(extra) + ")" if extra else ""
-                await log_event(f"Job {job_id} completed: {job_type}{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+                completed_msg = f"Job {job_id} completed: {job_type}{suffix}"
+                run_after_str = _format_run_after(row.get("run_after"))
+                if run_after_str:
+                    completed_msg += f"; scheduled to run after {run_after_str}"
+                await log_event(completed_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
             else:
                 await db_helpers.mark_job_done_exception(job_id, message or "Error", is_warning=is_warning, is_error=is_error)
                 kind = "warning" if is_warning else "error"
@@ -274,7 +292,11 @@ async def run_job_loop() -> None:
                 if cid is not None:
                     extra.append(f"channel_id={cid}")
                 suffix = " (" + ", ".join(extra) + ")" if extra else ""
-                await log_event(f"Job {job_id} failed: {job_type} — {message or 'Error'}{suffix}", sev, job_id=job_id, video_id=vid, channel_id=cid)
+                failed_msg = f"Job {job_id} failed: {job_type} — {message or 'Error'}{suffix}"
+                run_after_str = _format_run_after(row.get("run_after"))
+                if run_after_str:
+                    failed_msg += f"; scheduled to run after {run_after_str}"
+                await log_event(failed_msg, sev, job_id=job_id, video_id=vid, channel_id=cid)
             await broadcast_queue_update(updated_job_id=job_id)
             # Notify UI to refresh video list when a video-affecting job finished
             if row.get("video_id") and job_type in ("download_video", "get_metadata"):
@@ -292,7 +314,12 @@ async def run_job_loop() -> None:
             if cid is not None:
                 extra.append(f"channel_id={cid}")
             suffix = " (" + ", ".join(extra) + ")" if extra else ""
-            await log_event(f"{msg}{suffix}", SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid)
+            log_msg = f"{msg}{suffix}"
+            if row:
+                run_after_str = _format_run_after(row.get("run_after"))
+                if run_after_str:
+                    log_msg += f"; scheduled to run after {run_after_str}"
+            await log_event(log_msg, SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid)
             if job_id is not None:
                 await db_helpers.mark_job_done_exception(job_id, str(e)[:500], is_error=True)
                 await broadcast_queue_update(updated_job_id=job_id)
@@ -392,6 +419,7 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
                 SEVERITY_INFO,
                 job_id=job_id,
                 video_id=video_id,
+                channel_id=v.get("channel_id"),
             )
             continue
         await db_helpers.add_video_job_to_queue(
