@@ -116,7 +116,20 @@ export const api = {
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.status) q.set("status", params.status);
+      if (params.job_type) q.set("job_type", params.job_type);
       if (params.scheduler_entry_id != null) q.set("scheduler_entry_id", params.scheduler_entry_id);
+      if (params.video_id != null && params.video_id !== "") q.set("video_id", params.video_id);
+      if (params.channel_id != null && params.channel_id !== "") q.set("channel_id", params.channel_id);
+      if (params.scheduled_future !== undefined && params.scheduled_future !== null) q.set("scheduled_future", String(params.scheduled_future));
+      if (params.error_flag !== undefined && params.error_flag !== null) q.set("error_flag", String(params.error_flag));
+      if (params.warning_flag !== undefined && params.warning_flag !== null) q.set("warning_flag", String(params.warning_flag));
+      if (params.acknowledge_flag !== undefined && params.acknowledge_flag !== null) q.set("acknowledge_flag", String(params.acknowledge_flag));
+      if (params.record_created_from) q.set("record_created_from", params.record_created_from);
+      if (params.record_created_to) q.set("record_created_to", params.record_created_to);
+      if (params.last_update_from) q.set("last_update_from", params.last_update_from);
+      if (params.last_update_to) q.set("last_update_to", params.last_update_to);
+      if (params.run_after_from) q.set("run_after_from", params.run_after_from);
+      if (params.run_after_to) q.set("run_after_to", params.run_after_to);
       if (params.limit != null) q.set("limit", params.limit);
       if (params.offset != null) q.set("offset", params.offset);
       if (params.sort_by != null) q.set("sort_by", params.sort_by);
@@ -124,6 +137,7 @@ export const api = {
       const query = q.toString();
       return apiFetch(`/queue${query ? `?${query}` : ""}`);
     },
+    filterOptions: () => apiFetch("/queue/filter-options"),
     get: (id) => apiFetch(`/queue/${id}`),
     create: (body) => apiFetch("/queue", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/queue/${id}`, { method: "PATCH", body: JSON.stringify(body) }),

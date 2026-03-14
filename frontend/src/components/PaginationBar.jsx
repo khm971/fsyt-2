@@ -1,4 +1,5 @@
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Filter, X } from "lucide-react";
+import { Tooltip } from "./Tooltip";
 
 const btnClass =
   "flex items-center justify-center gap-1 min-w-[2.25rem] px-2 py-1.5 rounded-lg text-sm font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-700";
@@ -12,6 +13,9 @@ const btnClass =
  * @param {string} itemLabel - Label for items (e.g. "jobs", "videos", "entries")
  * @param {(page: number) => void} onPageChange - Called with new 1-based page
  * @param {boolean} [disabled] - Disable all buttons (e.g. while loading)
+ * @param {() => void} [onFilterClick] - If provided, show filter icon that calls this when clicked
+ * @param {boolean} [filterActive] - When true, style filter icon as active (e.g. blue) and show "Filters active" (clickable to open filters)
+ * @param {() => void} [onClearFilters] - If provided and filterActive, show a clear icon to clear all filters
  */
 export function PaginationBar({
   page,
@@ -21,17 +25,58 @@ export function PaginationBar({
   itemLabel,
   onPageChange,
   disabled = false,
+  onFilterClick,
+  filterActive = false,
+  onClearFilters,
 }) {
-  if (totalPages <= 1 && total <= pageSize) return null;
-
   const startItem = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const endItem = Math.min(page * pageSize, total);
+  const hidePagination = totalPages <= 1 && total <= pageSize;
+  if (hidePagination && !onFilterClick) return null;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 py-2 px-3 bg-gray-800/60 border border-gray-700 rounded-lg">
-      <span className="text-sm text-gray-400">
+      <span className="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
         Showing {total === 0 ? 0 : startItem}–{endItem} of {total} {itemLabel}
+        {onFilterClick && (
+          <Tooltip title="Columns and filters" side="top">
+            <button
+              type="button"
+              onClick={onFilterClick}
+              className={filterActive ? "text-blue-400 hover:text-blue-300 p-1 rounded hover:bg-gray-700" : "text-gray-400 hover:text-blue-400 p-1 rounded hover:bg-gray-700"}
+              aria-label="Columns and filters"
+            >
+              <Filter className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
+        {filterActive && (
+          <>
+            <Tooltip title="Columns and filters" side="top">
+              <button
+                type="button"
+                onClick={onFilterClick}
+                className="text-blue-400 hover:text-blue-300 text-sm"
+              >
+                Filters active
+              </button>
+            </Tooltip>
+            {onClearFilters && (
+              <Tooltip title="Clear filters" side="top">
+                <button
+                  type="button"
+                  onClick={onClearFilters}
+                  className="text-gray-400 hover:text-gray-300 p-1 rounded hover:bg-gray-700"
+                  aria-label="Clear filters"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </Tooltip>
+            )}
+          </>
+        )}
       </span>
+      {!hidePagination && (
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -75,6 +120,7 @@ export function PaginationBar({
           <ChevronsRight className="w-4 h-4" />
         </button>
       </div>
+      )}
     </div>
   );
 }

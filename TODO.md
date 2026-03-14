@@ -1,12 +1,11 @@
-
-
-- On Dash (Etc) is it getting the whole queue via websocket instead of just counts, possible old code.  Also issue with scheduled jobs not showing up anymore.
 - Column selector and filtering (options) on tables, starting with the Job Queue.
+- Fix ability to filter the queue page from the dashboard jobs widget.
+
+
+
+- Set up initial fake-ish user switching so we can start implementing user featuers more reasonably.
+- On the admin page, add a user section where we can start doing user-specific configs.
 - 
-
-
-
-
 
 Dial in the download rate
 
@@ -18,6 +17,3 @@ Seems to work well, ran for about a day with just one Google "please sign in" at
 Going to try:
 
 2,400/1,000 (3/13)
-
-
-

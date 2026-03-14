@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from database import db
 from api.schemas import (
     JobQueueCreate,
+    JobQueueFilterOptionsResponse,
     JobQueueListResponse,
     JobQueueResponse,
     JobQueueScheduledSummary,
@@ -12,7 +13,7 @@ from api.schemas import (
     JobQueueUpdate,
 )
 from job_processor import broadcast_queue_update
-from log_helper import log_event, SEVERITY_INFO
+from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
@@ -48,7 +49,20 @@ _NULLABLE_SORT_COLS = {"video_id", "last_update", "record_created", "status", "j
 @router.get("", response_model=JobQueueListResponse)
 async def list_jobs(
     status: str | None = Query(None),
+    job_type: str | None = Query(None),
     scheduler_entry_id: int | None = Query(None),
+    video_id: int | None = Query(None),
+    channel_id: int | None = Query(None),
+    scheduled_future: bool | None = Query(None),
+    error_flag: bool | None = Query(None),
+    warning_flag: bool | None = Query(None),
+    acknowledge_flag: bool | None = Query(None),
+    record_created_from: datetime | None = Query(None),
+    record_created_to: datetime | None = Query(None),
+    last_update_from: datetime | None = Query(None),
+    last_update_to: datetime | None = Query(None),
+    run_after_from: datetime | None = Query(None),
+    run_after_to: datetime | None = Query(None),
     limit: int = Query(500, le=500),
     offset: int = Query(0, ge=0),
     sort_by: str = Query("id", pattern="^(id|video_id|status|last_update|record_created|job_type|priority)$"),
@@ -61,9 +75,63 @@ async def list_jobs(
         where += f" AND status = ${i}"
         params.append(status)
         i += 1
+    if job_type:
+        where += f" AND job_type = ${i}"
+        params.append(job_type)
+        i += 1
     if scheduler_entry_id is not None:
         where += f" AND scheduler_entry_id = ${i}"
         params.append(scheduler_entry_id)
+        i += 1
+    if video_id is not None:
+        where += f" AND video_id = ${i}"
+        params.append(video_id)
+        i += 1
+    if channel_id is not None:
+        where += f" AND channel_id = ${i}"
+        params.append(channel_id)
+        i += 1
+    if scheduled_future is not None:
+        if scheduled_future:
+            where += " AND run_after IS NOT NULL AND run_after > NOW()"
+        else:
+            where += " AND (run_after IS NULL OR run_after <= NOW())"
+        # no param for NOW()
+    if error_flag is not None:
+        where += f" AND error_flag = ${i}"
+        params.append(error_flag)
+        i += 1
+    if warning_flag is not None:
+        where += f" AND warning_flag = ${i}"
+        params.append(warning_flag)
+        i += 1
+    if acknowledge_flag is not None:
+        where += f" AND acknowledge_flag = ${i}"
+        params.append(acknowledge_flag)
+        i += 1
+    if record_created_from is not None:
+        where += f" AND record_created >= ${i}"
+        params.append(record_created_from)
+        i += 1
+    if record_created_to is not None:
+        where += f" AND record_created <= ${i}"
+        params.append(record_created_to)
+        i += 1
+    if last_update_from is not None:
+        where += f" AND last_update >= ${i}"
+        params.append(last_update_from)
+        i += 1
+    if last_update_to is not None:
+        where += f" AND last_update <= ${i}"
+        params.append(last_update_to)
+        i += 1
+    if run_after_from is not None:
+        where += f" AND run_after >= ${i}"
+        params.append(run_after_from)
+        i += 1
+    if run_after_to is not None:
+        where += f" AND run_after <= ${i}"
+        params.append(run_after_to)
         i += 1
     total_row = await db.fetchrow(
         f"SELECT COUNT(*) AS total FROM job_queue {where}", *params
@@ -81,7 +149,19 @@ async def list_jobs(
            {order_clause} LIMIT ${i} OFFSET ${i + 1}"""
     params.extend([limit, offset])
     rows = await db.fetch(q, *params)
+    await log_event("Queue list requested with filters", SEVERITY_DEBUG)
     return JobQueueListResponse(items=[row_to_job(r) for r in rows], total=total)
+
+
+@router.get("/filter-options", response_model=JobQueueFilterOptionsResponse)
+async def get_filter_options():
+    """Return distinct statuses and job_types for queue filter dropdowns."""
+    status_rows = await db.fetch("SELECT DISTINCT status FROM job_queue ORDER BY 1")
+    type_rows = await db.fetch("SELECT DISTINCT job_type FROM job_queue ORDER BY 1")
+    statuses = [r["status"] for r in status_rows if r["status"]]
+    job_types = [r["job_type"] for r in type_rows if r["job_type"]]
+    await log_event("Queue filter options requested", SEVERITY_DEBUG)
+    return JobQueueFilterOptionsResponse(statuses=statuses, job_types=job_types)
 
 
 @router.get("/summary", response_model=JobQueueSummaryResponse)

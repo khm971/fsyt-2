@@ -178,6 +178,11 @@ class JobQueueListResponse(BaseModel):
     total: int
 
 
+class JobQueueFilterOptionsResponse(BaseModel):
+    statuses: list[str] = []
+    job_types: list[str] = []
+
+
 class JobQueueScheduledSummary(BaseModel):
     """Minimal job info for dashboard scheduled widget (next/last scheduled)."""
     job_queue_id: int

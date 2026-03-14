@@ -1,15 +1,16 @@
 import { useState, useEffect, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { cn, formatDateTimeWithSeconds } from "../lib/utils";
-import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock, Search, Filter, CheckCheck } from "lucide-react";
+import { Pause, Play, Check, X, ArrowUp, ArrowDown, ArrowUpDown, AlertCircle, AlertTriangle, CalendarClock, CheckCircle, Undo2, MessageCircle, Clock, Filter, CheckCheck } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
 import { PaginationBar } from "../components/PaginationBar";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
+import QueueColumnFilterModal, { DEFAULT_VISIBLE_COLUMNS, EMPTY_FILTERS } from "../components/QueueColumnFilterModal";
 import {
   JOB_TYPES,
   jobTypeUsesVideoId,
@@ -21,12 +22,72 @@ import {
   validateJobParams,
 } from "../lib/jobTypes";
 
+const QUEUE_VISIBLE_COLUMNS_KEY = "queueVisibleColumns";
+const QUEUE_FILTERS_KEY = "queueFilters";
+
+function filtersToParams(filters) {
+  const p = {};
+  if (filters.status) p.status = filters.status;
+  if (filters.job_type) p.job_type = filters.job_type;
+  if (filters.video_id !== "" && filters.video_id != null) p.video_id = Number(filters.video_id);
+  if (filters.channel_id !== "" && filters.channel_id != null) p.channel_id = Number(filters.channel_id);
+  if (filters.scheduled_future !== null && filters.scheduled_future !== undefined) p.scheduled_future = filters.scheduled_future;
+  if (filters.has_error !== null && filters.has_error !== undefined) p.error_flag = filters.has_error;
+  if (filters.has_warning !== null && filters.has_warning !== undefined) p.warning_flag = filters.has_warning;
+  if (filters.acknowledged !== null && filters.acknowledged !== undefined) p.acknowledge_flag = filters.acknowledged;
+  if (filters.record_created_from) p.record_created_from = filters.record_created_from;
+  if (filters.record_created_to) p.record_created_to = filters.record_created_to;
+  if (filters.last_update_from) p.last_update_from = filters.last_update_from;
+  if (filters.last_update_to) p.last_update_to = filters.last_update_to;
+  if (filters.run_after_from) p.run_after_from = filters.run_after_from;
+  if (filters.run_after_to) p.run_after_to = filters.run_after_to;
+  return p;
+}
+
+function hasActiveFilters(filters) {
+  return !!(
+    filters.status ||
+    filters.job_type ||
+    (filters.video_id !== "" && filters.video_id != null) ||
+    (filters.channel_id !== "" && filters.channel_id != null) ||
+    filters.scheduled_future !== null ||
+    filters.has_error !== null ||
+    filters.has_warning !== null ||
+    filters.acknowledged !== null ||
+    filters.record_created_from ||
+    filters.record_created_to ||
+    filters.last_update_from ||
+    filters.last_update_to ||
+    filters.run_after_from ||
+    filters.run_after_to
+  );
+}
+
+function loadStoredColumns() {
+  try {
+    const s = localStorage.getItem(QUEUE_VISIBLE_COLUMNS_KEY);
+    if (s) {
+      const arr = JSON.parse(s);
+      if (Array.isArray(arr) && arr.length > 0) return arr;
+    }
+  } catch (_) {}
+  return [...DEFAULT_VISIBLE_COLUMNS];
+}
+
+function loadStoredFilters() {
+  try {
+    const s = localStorage.getItem(QUEUE_FILTERS_KEY);
+    if (s) {
+      const o = JSON.parse(s);
+      if (o && typeof o === "object") return { ...EMPTY_FILTERS, ...o };
+    }
+  } catch (_) {}
+  return { ...EMPTY_FILTERS };
+}
+
 export default function Queue({ setError }) {
   const toast = useToast();
-  const [searchParams] = useSearchParams();
-  const filterWarningsAndErrors = searchParams.get("filter") === "warnings_and_errors";
-  const filterQueued = searchParams.get("filter") === "queued";
-  const filterScheduled = searchParams.get("filter") === "scheduled";
+  const [searchParams, setSearchParams] = useSearchParams();
   const PAGE_SIZE = 500;
   const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides, jobOverrides, refreshQueue } = useQueueWebSocket();
   const [control, setControl] = useState({});
@@ -37,6 +98,10 @@ export default function Queue({ setError }) {
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
   const [editingChannelId, setEditingChannelId] = useState(null);
   const [showAckAllModal, setShowAckAllModal] = useState(false);
+  const [showColumnFilterModal, setShowColumnFilterModal] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(loadStoredColumns);
+  const [filters, setFilters] = useState(loadStoredFilters);
+  const [listTotal, setListTotal] = useState(0);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
@@ -44,11 +109,66 @@ export default function Queue({ setError }) {
   const [pageLoading, setPageLoading] = useState(false);
   const [channels, setChannels] = useState([]);
 
+  const filterParams = useMemo(() => filtersToParams(filters), [filters]);
+  const activeFilters = useMemo(() => hasActiveFilters(filters), [filters]);
+  const effectiveTotal = activeFilters ? listTotal : totalCount;
+  const totalPages = Math.max(1, Math.ceil(effectiveTotal / PAGE_SIZE));
+
+  useEffect(() => {
+    const filter = searchParams.get("filter");
+    if (filter === "scheduled") {
+      const next = { ...EMPTY_FILTERS, scheduled_future: true };
+      setFilters(next);
+      setPage(1);
+      try {
+        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+      } catch (_) {}
+      setSearchParams({}, { replace: true });
+    } else if (filter === "queued") {
+      const next = { ...EMPTY_FILTERS, scheduled_future: false, status: "new" };
+      setFilters(next);
+      setPage(1);
+      try {
+        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+      } catch (_) {}
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  const sortableColumns = ["id", "priority", "job_type", "video_id", "status", "record_created", "last_update"];
+  const renderSortTh = (sortKey, label, defaultOrder = "desc") => (
+    <th className="px-4 py-3 font-medium" key={sortKey}>
+      <div className="flex items-center gap-1">
+        {label}
+        {sortableColumns.includes(sortKey) && (
+          <Tooltip title={sortBy === sortKey ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : `Sort by ${label}`} side="top">
+            <button
+              type="button"
+              onClick={() => {
+                setPage(1);
+                if (sortBy === sortKey) setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
+                else {
+                  setSortBy(sortKey);
+                  setSortOrder(defaultOrder);
+                }
+              }}
+              className={cn(
+                "p-0.5 rounded hover:bg-gray-700",
+                sortBy === sortKey ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
+              )}
+            >
+              {sortBy === sortKey ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+            </button>
+          </Tooltip>
+        )}
+      </div>
+    </th>
+  );
+
   const displayJobs = useMemo(
     () => pageJobs.map((j) => (jobOverrides[j.job_queue_id] ? { ...j, ...jobOverrides[j.job_queue_id] } : j)),
     [pageJobs, jobOverrides]
   );
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   useEffect(() => {
     if (page === 1 && jobs.length === 0 && totalCount > 0 && refreshQueue) refreshQueue();
@@ -68,17 +188,19 @@ export default function Queue({ setError }) {
         offset: (page - 1) * PAGE_SIZE,
         sort_by: sortBy,
         sort_order: sortOrder,
+        ...filterParams,
       })
       .then((res) => {
         setPageJobs(res.items || []);
+        if (Object.keys(filterParams).length > 0) setListTotal(res.total ?? 0);
       })
       .catch((e) => setError(e.message))
       .finally(() => setPageLoading(false));
-  }, [page, sortBy, sortOrder]);
+  }, [page, sortBy, sortOrder, filterParams]);
 
   useEffect(() => {
-    if (totalCount > 0 && page > totalPages) setPage(totalPages);
-  }, [totalCount, totalPages, page]);
+    if (effectiveTotal > 0 && page > totalPages) setPage(totalPages);
+  }, [effectiveTotal, totalPages, page]);
 
   const unackCounts = useMemo(() => {
     const unack = displayJobs.filter((j) => !j.acknowledge_flag && (j.error_flag || j.warning_flag));
@@ -90,49 +212,6 @@ export default function Queue({ setError }) {
     };
   }, [displayJobs]);
 
-  const sortedJobs = useMemo(() => {
-    let list = displayJobs;
-    const now = new Date();
-    if (filterWarningsAndErrors) {
-      list = list.filter((j) => j.error_flag || j.warning_flag);
-    } else if (filterQueued) {
-      list = list.filter((j) => j.status === "new");
-    } else if (filterScheduled) {
-      list = list.filter((j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now);
-    }
-    const copy = [...list];
-    copy.sort((a, b) => {
-      let aVal, bVal;
-      if (sortBy === "id") {
-        aVal = a.job_queue_id;
-        bVal = b.job_queue_id;
-      } else if (sortBy === "video_id") {
-        aVal = a.video_id ?? -1;
-        bVal = b.video_id ?? -1;
-      } else if (sortBy === "status") {
-        aVal = a.status ?? "";
-        bVal = b.status ?? "";
-      } else if (sortBy === "last_update") {
-        aVal = a.last_update ? new Date(a.last_update).getTime() : 0;
-        bVal = b.last_update ? new Date(b.last_update).getTime() : 0;
-      } else if (sortBy === "record_created") {
-        aVal = a.record_created ? new Date(a.record_created).getTime() : 0;
-        bVal = b.record_created ? new Date(b.record_created).getTime() : 0;
-      } else if (sortBy === "job_type") {
-        aVal = a.job_type ?? "";
-        bVal = b.job_type ?? "";
-      } else if (sortBy === "priority") {
-        aVal = a.priority ?? 0;
-        bVal = b.priority ?? 0;
-      } else {
-        return 0;
-      }
-      if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
-      return 0;
-    });
-    return copy;
-  }, [displayJobs, sortBy, sortOrder, filterWarningsAndErrors, filterQueued, filterScheduled]);
 
   useEffect(() => {
     api.control
@@ -256,19 +335,6 @@ export default function Queue({ setError }) {
           </span>
         </div>
       )}
-      {(filterWarningsAndErrors || filterQueued || filterScheduled) && (
-        <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 flex items-center justify-between gap-3">
-          <span className="text-gray-300 text-sm flex items-center gap-2">
-            <Filter className="w-4 h-4 text-blue-400" />
-            {filterWarningsAndErrors && "Showing only jobs with errors or warnings"}
-            {filterQueued && "Showing only queued jobs"}
-            {filterScheduled && "Showing only future scheduled jobs"}
-          </span>
-          <Link to="/queue" className="text-sm text-blue-400 hover:text-blue-300">
-            Clear filter
-          </Link>
-        </div>
-      )}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-xl font-semibold text-white">Job queue</h2>
         <div className="flex items-center gap-4">
@@ -320,17 +386,25 @@ export default function Queue({ setError }) {
         </div>
       </div>
 
-      {totalCount > PAGE_SIZE && (
-        <PaginationBar
-          page={page}
-          totalPages={totalPages}
-          total={totalCount}
-          pageSize={PAGE_SIZE}
-          itemLabel="jobs"
-          onPageChange={setPage}
-          disabled={pageLoading}
-        />
-      )}
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        total={effectiveTotal}
+        pageSize={PAGE_SIZE}
+        itemLabel="jobs"
+        onPageChange={setPage}
+        disabled={pageLoading}
+        onFilterClick={() => setShowColumnFilterModal(true)}
+        filterActive={activeFilters}
+        onClearFilters={() => {
+          const next = { ...EMPTY_FILTERS };
+          setFilters(next);
+          setPage(1);
+          try {
+            localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+          } catch (_) {}
+        }}
+      />
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
         {pageLoading && (
@@ -343,131 +417,23 @@ export default function Queue({ setError }) {
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-800/80 text-gray-400">
             <tr>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  ID
-                  <Tooltip title={sortBy === "id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by ID"}>
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("id"); setSortOrder("desc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "id" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  Priority
-                  <Tooltip title={sortBy === "priority" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Priority"}>
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "priority") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("priority"); setSortOrder("desc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "priority" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "priority" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  Type
-                  <Tooltip title={sortBy === "job_type" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Type"} side="top">
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "job_type") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("job_type"); setSortOrder("asc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "job_type" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "job_type" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  Video ID
-                  <Tooltip title={sortBy === "video_id" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Video ID"}>
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "video_id") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("video_id"); setSortOrder("desc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "video_id" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "video_id" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  Status
-                  <Tooltip title={sortBy === "status" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by Status"}>
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "status") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("status"); setSortOrder("asc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "status" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "status" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  Record Created
-                  <Tooltip title={sortBy === "record_created" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by record created"} side="top">
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "record_created") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("record_created"); setSortOrder("desc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "record_created" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "record_created" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">
-                <div className="flex items-center gap-1">
-                  As of
-                  <Tooltip title={sortBy === "last_update" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by last update"} side="top">
-                    <button
-                      type="button"
-                      onClick={() => { setPage(1); if (sortBy === "last_update") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("last_update"); setSortOrder("desc"); } }}
-                      className={cn(
-                        "p-0.5 rounded hover:bg-gray-700",
-                        sortBy === "last_update" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
-                      )}
-                    >
-                      {sortBy === "last_update" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
-                    </button>
-                  </Tooltip>
-                </div>
-              </th>
-              <th className="px-4 py-3 font-medium">Flags</th>
-              <th className="px-4 py-3 font-medium w-36">Actions</th>
+              {renderSortTh("id", "ID")}
+              {visibleColumns.includes("priority") && renderSortTh("priority", "Priority")}
+              {renderSortTh("job_type", "Type", "asc")}
+              {visibleColumns.includes("video_id") && renderSortTh("video_id", "Video ID")}
+              {visibleColumns.includes("channel_id") && <th className="px-4 py-3 font-medium" key="channel_id">Channel ID</th>}
+              {visibleColumns.includes("status") && renderSortTh("status", "Status", "asc")}
+              {visibleColumns.includes("record_created") && renderSortTh("record_created", "Record Created")}
+              {visibleColumns.includes("last_update") && renderSortTh("last_update", "As of")}
+              {visibleColumns.includes("run_after") && <th className="px-4 py-3 font-medium" key="run_after">Run after</th>}
+              {visibleColumns.includes("parameter") && <th className="px-4 py-3 font-medium" key="parameter">Parameter</th>}
+              {visibleColumns.includes("scheduler_entry_id") && <th className="px-4 py-3 font-medium" key="scheduler_entry_id">Scheduler</th>}
+              <th className="px-4 py-3 font-medium" key="flags">Flags</th>
+              <th className="px-4 py-3 font-medium w-36" key="actions">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {sortedJobs.map((j) => (
+            {displayJobs.map((j) => (
               <tr
                 key={j.job_queue_id}
                 className={cn(
@@ -485,7 +451,9 @@ export default function Queue({ setError }) {
                     {j.job_queue_id}
                   </button>
                 </td>
-                <td className="px-4 py-2 font-mono text-gray-400">{j.priority ?? "—"}</td>
+                {visibleColumns.includes("priority") && (
+                  <td className="px-4 py-2 font-mono text-gray-400">{j.priority ?? "—"}</td>
+                )}
                 <td className="px-4 py-2 text-white">
                   <button
                     type="button"
@@ -495,70 +463,91 @@ export default function Queue({ setError }) {
                     {j.job_type}
                   </button>
                 </td>
-                <td className="px-4 py-2 font-mono">
-                  {j.video_id != null ? (
-                    <Tooltip title="Video details" side="top" wrap>
-                      <button
-                        type="button"
-                        onClick={() => setVideoIdForDetails(j.video_id)}
-                        className="text-blue-400 hover:text-blue-300"
-                      >
-                        {j.video_id}
-                      </button>
-                    </Tooltip>
-                  ) : (
-                    <span className="text-gray-400">—</span>
-                  )}
-                </td>
-                <td className="px-4 py-2">
-                  <div className="flex flex-col gap-0.5">
-                    <Tooltip title={j.status_message || ""} side="top">
-                      <span
-                        className={cn(
-                          "inline-block",
-                          (() => {
-                            const displayStatus =
-                              j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
-                                ? videoProgressOverrides[j.video_id].status
-                                : j.status;
-                            if (displayStatus === "done") return "text-green-400";
-                            if (displayStatus === "new") return "text-blue-400";
-                            if (displayStatus === "error") return "text-red-400";
-                            if (displayStatus === "cancelled") return "text-white";
-                            // Any other non-terminal state (running and all derived sub-states)
-                            return "text-fuchsia-400";
-                          })()
-                        )}
-                      >
-                        {j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
-                          ? videoProgressOverrides[j.video_id].status
-                          : j.status}
-                      </span>
-                    </Tooltip>
-                    {(() => {
-                      const percent =
-                        j.video_id != null && videoProgressOverrides[j.video_id]?.status_percent_complete != null
-                          ? videoProgressOverrides[j.video_id].status_percent_complete
-                          : j.status_percent_complete;
-                      return percent != null && percent >= 1 && percent <= 99 ? (
-                        <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                            style={{
-                              width: `${Math.min(100, Math.max(0, Number(percent) || 0))}%`,
-                            }}
-                          />
-                        </div>
-                      ) : null;
-                    })()}
-                  </div>
-                </td>
-                <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
-                  {formatDateTimeWithSeconds(j.record_created)}
-                </td>
-                <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
-                  {formatDateTimeWithSeconds(j.last_update)}
-                </td>
+                {visibleColumns.includes("video_id") && (
+                  <td className="px-4 py-2 font-mono">
+                    {j.video_id != null ? (
+                      <Tooltip title="Video details" side="top" wrap>
+                        <button
+                          type="button"
+                          onClick={() => setVideoIdForDetails(j.video_id)}
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          {j.video_id}
+                        </button>
+                      </Tooltip>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+                )}
+                {visibleColumns.includes("channel_id") && (
+                  <td className="px-4 py-2 font-mono text-gray-400">{j.channel_id ?? "—"}</td>
+                )}
+                {visibleColumns.includes("status") && (
+                  <td className="px-4 py-2">
+                    <div className="flex flex-col gap-0.5">
+                      <Tooltip title={j.status_message || ""} side="top">
+                        <span
+                          className={cn(
+                            "inline-block",
+                            (() => {
+                              const displayStatus =
+                                j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
+                                  ? videoProgressOverrides[j.video_id].status
+                                  : j.status;
+                              if (displayStatus === "done") return "text-green-400";
+                              if (displayStatus === "new") return "text-blue-400";
+                              if (displayStatus === "error") return "text-red-400";
+                              if (displayStatus === "cancelled") return "text-white";
+                              return "text-fuchsia-400";
+                            })()
+                          )}
+                        >
+                          {j.video_id != null && videoProgressOverrides[j.video_id]?.status != null
+                            ? videoProgressOverrides[j.video_id].status
+                            : j.status}
+                        </span>
+                      </Tooltip>
+                      {(() => {
+                        const percent =
+                          j.video_id != null && videoProgressOverrides[j.video_id]?.status_percent_complete != null
+                            ? videoProgressOverrides[j.video_id].status_percent_complete
+                            : j.status_percent_complete;
+                        return percent != null && percent >= 1 && percent <= 99 ? (
+                          <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                              style={{ width: `${Math.min(100, Math.max(0, Number(percent) || 0))}%` }}
+                            />
+                          </div>
+                        ) : null;
+                      })()}
+                    </div>
+                  </td>
+                )}
+                {visibleColumns.includes("record_created") && (
+                  <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
+                    {formatDateTimeWithSeconds(j.record_created)}
+                  </td>
+                )}
+                {visibleColumns.includes("last_update") && (
+                  <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
+                    {formatDateTimeWithSeconds(j.last_update)}
+                  </td>
+                )}
+                {visibleColumns.includes("run_after") && (
+                  <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
+                    {j.run_after ? formatDateTimeWithSeconds(j.run_after) : "—"}
+                  </td>
+                )}
+                {visibleColumns.includes("parameter") && (
+                  <td className="px-4 py-2 text-gray-400 text-xs max-w-[12rem] truncate" title={j.parameter ?? ""}>
+                    {j.parameter ?? "—"}
+                  </td>
+                )}
+                {visibleColumns.includes("scheduler_entry_id") && (
+                  <td className="px-4 py-2 font-mono text-gray-400">{j.scheduler_entry_id ?? "—"}</td>
+                )}
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-1 flex-nowrap">
                     {j.status_message && (
@@ -639,22 +628,51 @@ export default function Queue({ setError }) {
             ))}
           </tbody>
         </table>
-        {sortedJobs.length === 0 && (
-          <div className="px-4 py-8 text-center text-gray-500">No jobs. Connect WebSocket or add a job.</div>
+        {displayJobs.length === 0 && (
+          <div className="px-4 py-8 text-center text-gray-500">No matching jobs found.</div>
         )}
         </>
         )}
       </div>
 
-      {totalCount > PAGE_SIZE && (
-        <PaginationBar
-          page={page}
-          totalPages={totalPages}
-          total={totalCount}
-          pageSize={PAGE_SIZE}
-          itemLabel="jobs"
-          onPageChange={setPage}
-          disabled={pageLoading}
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        total={effectiveTotal}
+        pageSize={PAGE_SIZE}
+        itemLabel="jobs"
+        onPageChange={setPage}
+        disabled={pageLoading}
+        onFilterClick={() => setShowColumnFilterModal(true)}
+        filterActive={activeFilters}
+        onClearFilters={() => {
+          const next = { ...EMPTY_FILTERS };
+          setFilters(next);
+          setPage(1);
+          try {
+            localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+          } catch (_) {}
+        }}
+      />
+
+      {showColumnFilterModal && (
+        <QueueColumnFilterModal
+          visibleColumns={visibleColumns}
+          onVisibleColumnsChange={(cols) => {
+            setVisibleColumns(cols);
+            try {
+              localStorage.setItem(QUEUE_VISIBLE_COLUMNS_KEY, JSON.stringify(cols));
+            } catch (_) {}
+          }}
+          filters={filters}
+          onFiltersChange={(newFilters) => {
+            setFilters(newFilters);
+            setPage(1);
+            try {
+              localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(newFilters));
+            } catch (_) {}
+          }}
+          onClose={() => setShowColumnFilterModal(false)}
         />
       )}
 
