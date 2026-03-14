@@ -85,8 +85,12 @@ async def run_job_loop() -> None:
             job_id = row["job_queue_id"]
             job_type = row["job_type"]
             vid, cid, param = row.get("video_id"), row.get("channel_id"), row.get("parameter")
-            print(f"[Job {job_id}] Started: {job_type} (video_id={vid}, channel_id={cid}, parameter={param!r})")
-            started_msg = f"Job {job_id} started: {job_type} (video_id={vid}, channel_id={cid})"
+            started_extra = [f"video_id={vid}"] if vid is not None else []
+            if cid is not None:
+                started_extra.append(f"channel_id={cid}")
+            started_paren = " (" + ", ".join(started_extra) + ")" if started_extra else ""
+            print(f"[Job {job_id}] Started: {job_type}{started_paren} (parameter={param!r})")
+            started_msg = f"Job {job_id} started: {job_type}{started_paren}"
             run_after_str = _format_run_after(row.get("run_after"))
             if run_after_str:
                 started_msg += f"; scheduled to run after {run_after_str}"

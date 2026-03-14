@@ -945,7 +945,10 @@ async def create_video(body: VideoCreate):
                 channel_id=row.get("channel_id"),
             )
     await broadcast_queue_update(updated_job_id=new_job_id)
-    await log_event(f"Video created: {provider_key} (video_id={row['video_id']}, channel_id={channel_id})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
+    created_extra = f"video_id={row['video_id']}"
+    if channel_id is not None:
+        created_extra += f", channel_id={channel_id}"
+    await log_event(f"Video created: {provider_key} ({created_extra})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
     return row_to_video(dict(row, status_percent_complete=None))
 
 

@@ -20,8 +20,12 @@ async def log_event(
     channel_id: int | None = None,
     subsystem: str | None = None,
 ) -> None:
-    """Write an event to the event_log table."""
+    """Write an event to the event_log table. When video_id is set and channel_id is not, looks up channel_id from the video row."""
     try:
+        if video_id is not None and channel_id is None:
+            channel_id = await db.fetchval(
+                "SELECT channel_id FROM video WHERE video_id = $1", video_id
+            )
         instance_id, hostname = get_backend_instance()
         await db.execute(
             """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem)

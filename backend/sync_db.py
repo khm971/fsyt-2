@@ -99,10 +99,18 @@ def log_event_sync(
     channel_id: int | None = None,
     subsystem: str | None = None,
 ) -> None:
-    """Write an event to the event_log table from sync/thread code."""
+    """Write an event to the event_log table from sync/thread code. When video_id is set and channel_id is not, looks up channel_id from the video row."""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                if video_id is not None and channel_id is None:
+                    cur.execute(
+                        "SELECT channel_id FROM video WHERE video_id = %s",
+                        (video_id,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] is not None:
+                        channel_id = row[0]
                 cur.execute(
                     """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem)
                        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s)""",

@@ -230,7 +230,9 @@ async def lifespan(app: FastAPI):
             else:
                 parts = []
                 for r in running:
-                    s = f"id={r['job_queue_id']} type={r['job_type']!r} video_id={r['video_id']} channel_id={r['channel_id']}"
+                    s = f"id={r['job_queue_id']} type={r['job_type']!r} video_id={r['video_id']}"
+                    if r.get("channel_id") is not None:
+                        s += f" channel_id={r['channel_id']}"
                     if r["status_message"]:
                         s += f" {r['status_message']}"
                     if r["status_percent_complete"] is not None:

@@ -295,7 +295,13 @@ async def create_job(body: JobQueueCreate):
     )
     await broadcast_queue_update(updated_job_id=row["job_queue_id"])
     j = row_to_job(row)
-    await log_event(f"Job queued: {j.job_type} (ID {j.job_queue_id}, video_id={j.video_id}, channel_id={j.channel_id})", SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id)
+    queued_extra = [f"ID {j.job_queue_id}"]
+    if j.video_id is not None:
+        queued_extra.append(f"video_id={j.video_id}")
+    if j.channel_id is not None:
+        queued_extra.append(f"channel_id={j.channel_id}")
+    queued_msg = f"Job queued: {j.job_type} (" + ", ".join(queued_extra) + ")"
+    await log_event(queued_msg, SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id)
     return j
 
 

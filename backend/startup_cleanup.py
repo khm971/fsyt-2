@@ -46,11 +46,14 @@ async def run_startup_cleanup() -> None:
             """UPDATE job_queue SET status_percent_complete = 0 WHERE job_queue_id = $1""",
             job_id,
         )
-        detail = (
-            f"job_queue_id={job_id} job_type={r['job_type']!r} status={r['status']!r} "
-            f"video_id={r.get('video_id')} channel_id={r.get('channel_id')} "
-            f"previous status_percent_complete={r['status_percent_complete']}"
-        )
+        detail_parts = [
+            f"job_queue_id={job_id} job_type={r['job_type']!r} status={r['status']!r}",
+            f"video_id={r.get('video_id')}",
+        ]
+        if r.get("channel_id") is not None:
+            detail_parts.append(f"channel_id={r.get('channel_id')}")
+        detail_parts.append(f"previous status_percent_complete={r['status_percent_complete']}")
+        detail = " ".join(detail_parts)
         await log_event(
             f"Startup cleanup: reset status_percent_complete to 0 (was 1–99%, no job in progress at startup) ({detail})",
             SEVERITY_WARNING,
