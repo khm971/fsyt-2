@@ -555,13 +555,19 @@ def _job_row_to_dict(r) -> dict:
 async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
     counts_row = await db.fetchrow(
         """SELECT COUNT(*) AS total,
+                  count(*) FILTER (WHERE status = 'new') AS queued_count,
                   count(*) FILTER (WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())) AS runnable_count,
-                  count(*) FILTER (WHERE status NOT IN ('new', 'done', 'cancelled')) AS running_count
+                  count(*) FILTER (WHERE status NOT IN ('new', 'done', 'cancelled')) AS running_count,
+                  count(*) FILTER (WHERE error_flag AND NOT acknowledge_flag) AS errors_count,
+                  count(*) FILTER (WHERE warning_flag AND NOT acknowledge_flag) AS warnings_count
            FROM job_queue"""
     )
     total_count = int(counts_row["total"] or 0)
+    queued_count = int(counts_row["queued_count"] or 0)
     runnable_count = int(counts_row["runnable_count"] or 0)
     running_count = int(counts_row["running_count"] or 0)
+    errors_count = int(counts_row["errors_count"] or 0)
+    warnings_count = int(counts_row["warnings_count"] or 0)
     multi_row = await db.fetchrow(
         """SELECT COUNT(*) AS n FROM backend_instances
            WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
@@ -582,14 +588,16 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
             }
             for r in instances_rows
         ]
-    rows = await db.fetch(
-        """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, status, status_percent_complete, status_message,
-                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id
-           FROM job_queue ORDER BY priority DESC NULLS LAST, job_queue_id ASC LIMIT 500"""
+    # Pending jobs: new + running only (no done/cancelled), uncapped; minimal fields for dashboard and Videos page.
+    pending_rows = await db.fetch(
+        """SELECT job_queue_id, record_created, job_type, video_id, channel_id, status,
+                  status_percent_complete, last_update, run_after, error_flag, warning_flag,
+                  acknowledge_flag, priority
+           FROM job_queue
+           WHERE status NOT IN ('done', 'cancelled')
+           ORDER BY priority DESC NULLS LAST, job_queue_id ASC"""
     )
-    jobs = [
+    pending_jobs = [
         {
             "job_queue_id": r["job_queue_id"],
             "record_created": r["record_created"].isoformat() if r["record_created"] else None,
@@ -598,17 +606,14 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
             "channel_id": r["channel_id"],
             "status": r["status"],
             "status_percent_complete": r["status_percent_complete"],
-            "status_message": r["status_message"],
             "last_update": r["last_update"].isoformat() if r["last_update"] else None,
-            "completed_flag": r["completed_flag"],
-            "warning_flag": r["warning_flag"],
+            "run_after": r["run_after"].isoformat() if r.get("run_after") else None,
             "error_flag": r["error_flag"],
+            "warning_flag": r["warning_flag"],
             "acknowledge_flag": r["acknowledge_flag"],
             "priority": r["priority"],
-            "run_after": r["run_after"].isoformat() if r.get("run_after") else None,
-            "scheduler_entry_id": r.get("scheduler_entry_id"),
         }
-        for r in rows
+        for r in pending_rows
     ]
     running_job_row = await db.fetchrow(
         """SELECT job_queue_id, job_type, status_percent_complete, video_id
@@ -663,11 +668,14 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
     queue_paused = await db_helpers.get_control_bool("queue_paused")
     payload = {
         "type": "queue_update",
-        "jobs": jobs,
+        "pending_jobs": pending_jobs,
         "total_count": total_count,
+        "queued_count": queued_count,
         "runnable_count": runnable_count,
         "running_count": running_count,
         "running_job": running_job,
+        "errors_count": errors_count,
+        "warnings_count": warnings_count,
         "scheduled_count": scheduled_count,
         "next_scheduled_job": next_scheduled_job,
         "last_scheduled_job": last_scheduled_job,

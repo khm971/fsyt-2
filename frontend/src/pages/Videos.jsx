@@ -303,7 +303,7 @@ export default function Videos({ setError }) {
                 ? { job_queue_id: v.pending_job_id, job_type: v.pending_job_type }
                 : null;
               const pendingJobFromWs = jobs
-                .filter((j) => j.video_id === v.video_id && (j.status === "new" || j.status === "running"))
+                .filter((j) => j.video_id === v.video_id)
                 .sort((a, b) => {
                   const aT = a.last_update ? new Date(a.last_update).getTime() : 0;
                   const bT = b.last_update ? new Date(b.last_update).getTime() : 0;

@@ -28,7 +28,7 @@ export default function Dashboard({ setError }) {
   const [now, setNow] = useState(() => new Date());
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const queueRefreshTriggeredRef = useRef(false);
-  const { jobs, queueSummary, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshSummary } = useQueueWebSocket();
+  const { queueSummary, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshSummary } = useQueueWebSocket();
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
@@ -101,58 +101,19 @@ export default function Dashboard({ setError }) {
       ? queuePausedFromServer
       : control.queue_paused?.value === "true";
   const chargeableErrorsLockout = control.chargeable_errors_lockout?.value === "true";
-  const isJobInProgress = (j) => j.status != null && j.status !== "new" && j.status !== "done" && j.status !== "cancelled";
-  const runningCount = queueSummary?.running_count ?? jobs.filter(isJobInProgress).length;
-  const running = queueSummary?.running?.length ? queueSummary.running : jobs.filter(isJobInProgress);
-  const runningJob =
-    queueSummary?.running_job != null
-      ? queueSummary.running_job
-      : running[0] != null
-        ? {
-            job_queue_id: running[0].job_queue_id,
-            job_type: running[0].job_type,
-            status_percent_complete: running[0].status_percent_complete,
-            video_id: running[0].video_id ?? undefined,
-          }
-        : null;
-  const runnableCount =
-    queueSummary?.runnable_count ??
-    jobs.filter(
-      (j) =>
-        j.status === "new" &&
-        (!j.run_after || new Date(j.run_after) <= now)
-    ).length;
-  const errorsCount = queueSummary?.errors_count ?? jobs.filter((j) => j.error_flag && !j.acknowledge_flag).length;
-  const warningsCount = queueSummary?.warnings_count ?? jobs.filter((j) => j.warning_flag && !j.acknowledge_flag).length;
-  const futureScheduled = jobs.filter(
-    (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
-  );
-  const jobsWithRunAfter = jobs.filter((j) => j.status === "new" && j.run_after != null);
-  const lastScheduledRunAfterFromJobs =
-    jobsWithRunAfter.length > 0
-      ? Math.max(...jobsWithRunAfter.map((j) => new Date(j.run_after).getTime()))
-      : null;
-  const nextScheduledRunAfterFromJobs =
-    futureScheduled.length > 0
-      ? Math.min(...futureScheduled.map((j) => new Date(j.run_after).getTime()))
-      : null;
-  const nextScheduledJobFromJobs =
-    futureScheduled.length > 0 && nextScheduledRunAfterFromJobs != null
-      ? futureScheduled.find((j) => new Date(j.run_after).getTime() === nextScheduledRunAfterFromJobs)
-      : null;
-  const lastScheduledJobFromJobs =
-    jobsWithRunAfter.length > 0 && lastScheduledRunAfterFromJobs != null
-      ? jobsWithRunAfter.find((j) => new Date(j.run_after).getTime() === lastScheduledRunAfterFromJobs)
-      : null;
-  const scheduledCount = futureScheduled.length > 0 ? futureScheduled.length : (queueSummary?.scheduled_count ?? 0);
-  const nextScheduledJob = nextScheduledJobFromJobs ?? queueSummary?.next_scheduled_job ?? null;
-  const lastScheduledJob = lastScheduledJobFromJobs ?? queueSummary?.last_scheduled_job ?? null;
+  const runningCount = queueSummary?.running_count ?? 0;
+  const running = queueSummary?.running ?? [];
+  const runningJob = queueSummary?.running_job ?? null;
+  const runnableCount = queueSummary?.runnable_count ?? 0;
+  const errorsCount = queueSummary?.errors_count ?? 0;
+  const warningsCount = queueSummary?.warnings_count ?? 0;
+  const scheduledCount = queueSummary?.scheduled_count ?? 0;
+  const nextScheduledJob = queueSummary?.next_scheduled_job ?? null;
+  const lastScheduledJob = queueSummary?.last_scheduled_job ?? null;
   const nextScheduledRunAfter =
-    nextScheduledRunAfterFromJobs ??
-    (nextScheduledJob?.run_after != null ? new Date(nextScheduledJob.run_after).getTime() : null);
+    nextScheduledJob?.run_after != null ? new Date(nextScheduledJob.run_after).getTime() : null;
   const lastScheduledRunAfter =
-    lastScheduledRunAfterFromJobs ??
-    (lastScheduledJob?.run_after != null ? new Date(lastScheduledJob.run_after).getTime() : null);
+    lastScheduledJob?.run_after != null ? new Date(lastScheduledJob.run_after).getTime() : null;
   useEffect(() => {
     if (queueSummary == null && refreshSummary && !queueRefreshTriggeredRef.current) {
       queueRefreshTriggeredRef.current = true;

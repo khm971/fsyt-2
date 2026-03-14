@@ -8,40 +8,22 @@ function isInProgress(status) {
   return status != null && status !== "new" && status !== "done" && status !== "cancelled";
 }
 
-function summaryFromJobs(jobsList) {
-  const list = jobsList || [];
-  const now = new Date();
+/** Build summary from server-provided counts and optional pending_jobs (for running list). */
+function summaryFromMessage(msg, pendingList) {
+  const list = pendingList || [];
   const running = list.filter((j) => isInProgress(j.status));
-  const queued = list.filter((j) => j.status === "new");
-  const runnable = list.filter(
-    (j) => j.status === "new" && (!j.run_after || new Date(j.run_after) <= now)
-  );
-  const errors = list.filter((j) => j.error_flag && !j.acknowledge_flag);
-  const warnings = list.filter((j) => j.warning_flag && !j.acknowledge_flag);
-  const futureScheduled = list.filter(
-    (j) => j.status === "new" && j.run_after != null && new Date(j.run_after) > now
-  );
-  const nextScheduled = futureScheduled.length > 0
-    ? futureScheduled.reduce((a, j) => (!a || new Date(j.run_after) < new Date(a.run_after) ? j : a), null)
-    : null;
-  const lastScheduled = futureScheduled.length > 0
-    ? futureScheduled.reduce((a, j) => (!a || new Date(j.run_after) > new Date(a.run_after) ? j : a), null)
-    : null;
   return {
     running,
-    running_count: running.length,
-    queued_count: queued.length,
-    runnable_count: runnable.length,
-    total_count: list.length,
-    errors_count: errors.length,
-    warnings_count: warnings.length,
-    scheduled_count: futureScheduled.length,
-    next_scheduled_job: nextScheduled
-      ? { job_queue_id: nextScheduled.job_queue_id, run_after: nextScheduled.run_after, job_type: nextScheduled.job_type }
-      : null,
-    last_scheduled_job: lastScheduled
-      ? { job_queue_id: lastScheduled.job_queue_id, run_after: lastScheduled.run_after, job_type: lastScheduled.job_type }
-      : null,
+    running_count: typeof msg.running_count === "number" ? msg.running_count : running.length,
+    queued_count: typeof msg.queued_count === "number" ? msg.queued_count : list.filter((j) => j.status === "new").length,
+    runnable_count: typeof msg.runnable_count === "number" ? msg.runnable_count : 0,
+    total_count: typeof msg.total_count === "number" ? msg.total_count : 0,
+    errors_count: typeof msg.errors_count === "number" ? msg.errors_count : 0,
+    warnings_count: typeof msg.warnings_count === "number" ? msg.warnings_count : 0,
+    scheduled_count: typeof msg.scheduled_count === "number" ? msg.scheduled_count : 0,
+    next_scheduled_job: msg.next_scheduled_job ?? null,
+    last_scheduled_job: msg.last_scheduled_job ?? null,
+    running_job: msg.running_job ?? (running[0] ? { job_queue_id: running[0].job_queue_id, job_type: running[0].job_type, status_percent_complete: running[0].status_percent_complete, video_id: running[0].video_id } : null),
   };
 }
 
@@ -101,36 +83,12 @@ export function QueueWebSocketProvider({ children }) {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === "queue_update" && Array.isArray(msg.jobs)) {
-          const hasJobs = msg.jobs.length > 0;
-          const hadJobs = jobsRef.current.length > 0;
-          if (hasJobs || !hadJobs) {
-            jobsRef.current = msg.jobs;
-            setJobs(msg.jobs);
-            setTotalCount(typeof msg.total_count === "number" ? msg.total_count : msg.jobs.length);
-            const summary = summaryFromJobs(msg.jobs);
-            if (typeof msg.total_count === "number") summary.total_count = msg.total_count;
-            if (typeof msg.runnable_count === "number") summary.runnable_count = msg.runnable_count;
-            if (typeof msg.running_count === "number") summary.running_count = msg.running_count;
-            if (msg.running_job !== undefined) summary.running_job = msg.running_job;
-            if (typeof msg.scheduled_count === "number") summary.scheduled_count = msg.scheduled_count;
-            if (msg.next_scheduled_job !== undefined) summary.next_scheduled_job = msg.next_scheduled_job;
-            if (msg.last_scheduled_job !== undefined) summary.last_scheduled_job = msg.last_scheduled_job;
-            setQueueSummary(summary);
-          } else {
-            setQueueSummary((prev) => {
-              if (!prev) return prev;
-              const next = { ...prev };
-              if (typeof msg.total_count === "number") next.total_count = msg.total_count;
-              if (typeof msg.runnable_count === "number") next.runnable_count = msg.runnable_count;
-              if (typeof msg.running_count === "number") next.running_count = msg.running_count;
-              if (msg.running_job !== undefined) next.running_job = msg.running_job;
-              if (typeof msg.scheduled_count === "number") next.scheduled_count = msg.scheduled_count;
-              if (msg.next_scheduled_job !== undefined) next.next_scheduled_job = msg.next_scheduled_job;
-              if (msg.last_scheduled_job !== undefined) next.last_scheduled_job = msg.last_scheduled_job;
-              return next;
-            });
-          }
+        if (msg.type === "queue_update") {
+          const pendingJobs = Array.isArray(msg.pending_jobs) ? msg.pending_jobs : [];
+          jobsRef.current = pendingJobs;
+          setJobs(pendingJobs);
+          setTotalCount(typeof msg.total_count === "number" ? msg.total_count : pendingJobs.length);
+          setQueueSummary(summaryFromMessage(msg, pendingJobs));
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
           if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
@@ -188,16 +146,30 @@ export function QueueWebSocketProvider({ children }) {
   }, [connect]);
 
   const refreshQueue = useCallback(() => {
-    api.queue
-      .list({ limit: INITIAL_QUEUE_LIMIT })
-      .then((res) => {
-        if (res?.items && Array.isArray(res.items)) {
-          jobsRef.current = res.items;
-          setJobs(res.items);
-          setTotalCount(typeof res.total === "number" ? res.total : res.items.length);
-          setQueueSummary(summaryFromJobs(res.items));
-          setQueueUpdatedAt(Date.now());
+    Promise.all([api.queue.summary(), api.queue.list({ limit: INITIAL_QUEUE_LIMIT })])
+      .then(([summaryRes, listRes]) => {
+        if (summaryRes) {
+          setQueueSummary({
+            running: summaryRes.running ?? [],
+            running_count: summaryRes.running_count ?? 0,
+            queued_count: summaryRes.queued_count ?? 0,
+            runnable_count: summaryRes.runnable_count ?? 0,
+            total_count: summaryRes.total_count ?? 0,
+            errors_count: summaryRes.errors_count ?? 0,
+            warnings_count: summaryRes.warnings_count ?? 0,
+            scheduled_count: summaryRes.scheduled_count ?? 0,
+            next_scheduled_job: summaryRes.next_scheduled_job ?? null,
+            last_scheduled_job: summaryRes.last_scheduled_job ?? null,
+            running_job: summaryRes.running?.length ? { job_queue_id: summaryRes.running[0].job_queue_id, job_type: summaryRes.running[0].job_type, status_percent_complete: summaryRes.running[0].status_percent_complete, video_id: summaryRes.running[0].video_id } : null,
+          });
+          setTotalCount(summaryRes.total_count ?? 0);
         }
+        if (listRes?.items && Array.isArray(listRes.items)) {
+          const pending = listRes.items.filter((j) => j.status !== "done" && j.status !== "cancelled");
+          jobsRef.current = pending;
+          setJobs(pending);
+        }
+        setQueueUpdatedAt(Date.now());
       })
       .catch(() => {});
   }, []);
@@ -207,8 +179,9 @@ export function QueueWebSocketProvider({ children }) {
       .summary()
       .then((res) => {
         if (res) {
+          const running = res.running ?? [];
           setQueueSummary({
-            running: res.running ?? [],
+            running,
             running_count: res.running_count ?? 0,
             queued_count: res.queued_count ?? 0,
             runnable_count: res.runnable_count ?? 0,
@@ -218,6 +191,9 @@ export function QueueWebSocketProvider({ children }) {
             scheduled_count: res.scheduled_count ?? 0,
             next_scheduled_job: res.next_scheduled_job ?? null,
             last_scheduled_job: res.last_scheduled_job ?? null,
+            running_job: running.length
+              ? { job_queue_id: running[0].job_queue_id, job_type: running[0].job_type, status_percent_complete: running[0].status_percent_complete, video_id: running[0].video_id }
+              : null,
           });
           setTotalCount(res.total_count ?? 0);
           setQueueUpdatedAt(Date.now());
