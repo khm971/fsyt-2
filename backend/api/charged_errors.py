@@ -1,5 +1,5 @@
 """Charged errors REST API (rate/lockout)."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from database import db
 from api.schemas import ChargedErrorResponse
@@ -37,7 +37,7 @@ async def list_charged_errors(
 
 
 @router.post("/dismiss-all")
-async def dismiss_all_charged_errors():
+async def dismiss_all_charged_errors(request: Request):
     r = await db.fetchrow(
         """WITH updated AS (
              UPDATE charged_error SET is_dismissed = TRUE WHERE is_dismissed = FALSE
@@ -46,7 +46,8 @@ async def dismiss_all_charged_errors():
            SELECT COUNT(*) AS dismissed_count FROM updated"""
     )
     count = int(r["dismissed_count"]) if r.get("dismissed_count") is not None else 0
-    await log_event("Charged errors: dismiss all", SEVERITY_INFO)
+    user_id = getattr(request.state, "user_id", None)
+    await log_event("Charged errors: dismiss all", SEVERITY_INFO, user_id=user_id)
     return {"dismissed_count": count}
 
 

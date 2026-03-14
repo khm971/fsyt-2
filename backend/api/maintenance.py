@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from database import db
 from api.videos import clear_all_hls_transcodes
@@ -9,31 +9,36 @@ router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
 
 @router.post("/clear-transcodes")
-async def clear_transcodes():
+async def clear_transcodes(request: Request):
     try:
         return await clear_all_hls_transcodes()
     except Exception as exc:
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             f"Maintenance: failed to clear transcodes: {type(exc).__name__}: {exc}",
             SEVERITY_ERROR,
+            user_id=user_id,
         )
         raise HTTPException(500, "Failed to clear transcodes") from exc
 
 
 @router.post("/clear-watch-history")
-async def clear_watch_history():
+async def clear_watch_history(request: Request):
     try:
-        await log_event("Maintenance: clearing all watch history", SEVERITY_INFO)
+        user_id = getattr(request.state, "user_id", None)
+        await log_event("Maintenance: clearing all watch history", SEVERITY_INFO, user_id=user_id)
         await db.execute(
             """UPDATE user_video
                SET progress_seconds = 0, progress_percent = 0, is_finished = FALSE, last_watched = NULL"""
         )
-        await log_event("Maintenance: cleared all watch history", SEVERITY_INFO)
+        await log_event("Maintenance: cleared all watch history", SEVERITY_INFO, user_id=user_id)
         return {"ok": True}
     except Exception as exc:
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             f"Maintenance: failed to clear watch history: {type(exc).__name__}: {exc}",
             SEVERITY_ERROR,
+            user_id=user_id,
         )
         raise HTTPException(500, "Failed to clear watch history") from exc
 
@@ -53,7 +58,7 @@ async def cancel_pending_future_jobs_preview():
 
 
 @router.post("/cancel-pending-future-jobs")
-async def cancel_pending_future_jobs():
+async def cancel_pending_future_jobs(request: Request):
     """Set status to 'cancelled' and status_message for all jobs with status='new' and run_after > NOW().
     Does not set warning_flag since the user initiated this action."""
     try:
@@ -64,14 +69,18 @@ async def cancel_pending_future_jobs():
         )
         cancelled_count = int(result.split()[-1]) if result else 0
         await broadcast_queue_update()
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             f"Maintenance: cancelled {cancelled_count} pending future jobs",
             SEVERITY_INFO,
+            user_id=user_id,
         )
         return {"cancelled_count": cancelled_count}
     except Exception as exc:
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             f"Maintenance: failed to cancel pending future jobs: {type(exc).__name__}: {exc}",
             SEVERITY_ERROR,
+            user_id=user_id,
         )
         raise HTTPException(500, "Failed to cancel pending future jobs") from exc

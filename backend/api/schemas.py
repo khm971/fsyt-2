@@ -73,6 +73,8 @@ class ChannelResponse(ChannelBase):
     record_updated: Optional[datetime] = None
     video_count: Optional[int] = None
     video_count_done: Optional[int] = None
+    created_by_user_id: Optional[int] = None
+    created_by_username: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -120,6 +122,8 @@ class VideoResponse(VideoBase):
     pending_job_id: Optional[int] = None
     pending_job_type: Optional[str] = None
     tags: Optional[list[TagResponse]] = None
+    created_by_user_id: Optional[int] = None
+    created_by_username: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -141,6 +145,7 @@ class JobQueueCreate(BaseModel):
     run_after: Optional[datetime] = None
     priority: int = 50
     scheduler_entry_id: Optional[int] = None
+    user_id: Optional[int] = None  # Set by API from request.state, not sent by client
 
 
 class JobQueueUpdate(BaseModel):
@@ -168,6 +173,8 @@ class JobQueueResponse(BaseModel):
     run_after: Optional[datetime] = None
     priority: Optional[int] = None
     scheduler_entry_id: Optional[int] = None
+    user_id: Optional[int] = None
+    username: Optional[str] = None
 
     class Config:
         from_attributes = True

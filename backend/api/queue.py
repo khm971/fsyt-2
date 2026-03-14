@@ -1,6 +1,6 @@
 """Job queue REST API."""
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from database import db
 from api.schemas import (
@@ -39,6 +39,8 @@ def row_to_job(r) -> JobQueueResponse:
         run_after=r["run_after"],
         priority=r["priority"],
         scheduler_entry_id=r.get("scheduler_entry_id"),
+        user_id=r.get("user_id"),
+        username=r.get("username"),
     )
 
 
@@ -140,12 +142,14 @@ async def list_jobs(
     sort_col = "job_queue_id" if sort_by == "id" else sort_by
     dirn = "ASC" if sort_order == "asc" else "DESC"
     nulls = " NULLS LAST" if sort_col in _NULLABLE_SORT_COLS else ""
-    order_clause = f"ORDER BY {sort_col} {dirn}{nulls}"
-    q = f"""SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, status, status_percent_complete, status_message,
-                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id
-           FROM job_queue {where}
+    order_clause = f"ORDER BY j.{sort_col} {dirn}{nulls}, j.job_queue_id {dirn}"
+    q = f"""SELECT j.job_queue_id, j.record_created, j.job_type, j.video_id, j.channel_id, j.other_target_id,
+                  j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
+                  j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
+                  j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username
+           FROM job_queue j
+           LEFT JOIN app_user u ON j.user_id = u.user_id
+           {where}
            {order_clause} LIMIT ${i} OFFSET ${i + 1}"""
     params.extend([limit, offset])
     rows = await db.fetch(q, *params)
@@ -178,13 +182,14 @@ async def get_queue_summary():
            FROM job_queue"""
     )
     running_rows = await db.fetch(
-        """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, status, status_percent_complete, status_message,
-                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id
-           FROM job_queue
-           WHERE status != 'new' AND status != 'done' AND status != 'cancelled'
-           ORDER BY last_update DESC NULLS LAST LIMIT 20"""
+        """SELECT j.job_queue_id, j.record_created, j.job_type, j.video_id, j.channel_id, j.other_target_id,
+                  j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
+                  j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
+                  j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username
+           FROM job_queue j
+           LEFT JOIN app_user u ON j.user_id = u.user_id
+           WHERE j.status != 'new' AND j.status != 'done' AND j.status != 'cancelled'
+           ORDER BY j.last_update DESC NULLS LAST LIMIT 20"""
     )
     scheduled_count_row = await db.fetchrow(
         """SELECT count(*) AS n FROM job_queue
@@ -236,11 +241,13 @@ async def get_queue_summary():
 @router.get("/{job_id}", response_model=JobQueueResponse)
 async def get_job(job_id: int):
     r = await db.fetchrow(
-        """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, status, status_percent_complete, status_message,
-                  last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id
-           FROM job_queue WHERE job_queue_id = $1""",
+        """SELECT j.job_queue_id, j.record_created, j.job_type, j.video_id, j.channel_id, j.other_target_id,
+                  j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
+                  j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
+                  j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username
+           FROM job_queue j
+           LEFT JOIN app_user u ON j.user_id = u.user_id
+           WHERE j.job_queue_id = $1""",
         job_id,
     )
     if not r:
@@ -272,17 +279,18 @@ def _validate_job_create(body: JobQueueCreate) -> None:
 
 
 @router.post("", response_model=JobQueueResponse, status_code=201)
-async def create_job(body: JobQueueCreate):
+async def create_job(request: Request, body: JobQueueCreate):
     _validate_job_create(body)
+    user_id = getattr(request.state, "user_id", None)
     row = await db.fetchrow(
         """INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-            status, run_after, priority, scheduler_entry_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8, $9)
+            status, run_after, priority, scheduler_entry_id, user_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8, $9, $10)
         RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                  run_after, priority, scheduler_entry_id""",
+                  run_after, priority, scheduler_entry_id, user_id""",
         body.job_type,
         body.video_id,
         body.channel_id,
@@ -292,6 +300,7 @@ async def create_job(body: JobQueueCreate):
         body.run_after,
         body.priority,
         body.scheduler_entry_id,
+        user_id,
     )
     await broadcast_queue_update(updated_job_id=row["job_queue_id"])
     j = row_to_job(row)
@@ -301,7 +310,7 @@ async def create_job(body: JobQueueCreate):
     if j.channel_id is not None:
         queued_extra.append(f"channel_id={j.channel_id}")
     queued_msg = f"Job queued: {j.job_type} (" + ", ".join(queued_extra) + ")"
-    await log_event(queued_msg, SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id)
+    await log_event(queued_msg, SEVERITY_INFO, job_id=j.job_queue_id, video_id=j.video_id, channel_id=j.channel_id, user_id=user_id)
     return j
 
 
@@ -335,11 +344,11 @@ async def update_job(job_id: int, body: JobQueueUpdate):
     if not updates:
         # No changes; return current job
         return row_to_job(await db.fetchrow(
-            """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
-                      parameter, extended_parameters, status, status_percent_complete, status_message,
-                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                      run_after, priority, scheduler_entry_id
-               FROM job_queue WHERE job_queue_id = $1""",
+            """SELECT j.job_queue_id, j.record_created, j.job_type, j.video_id, j.channel_id, j.other_target_id,
+                      j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
+                      j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
+                      j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username
+               FROM job_queue j LEFT JOIN app_user u ON j.user_id = u.user_id WHERE j.job_queue_id = $1""",
             job_id,
         ))
     params.append(job_id)
@@ -348,7 +357,7 @@ async def update_job(job_id: int, body: JobQueueUpdate):
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority, scheduler_entry_id""",
+                     run_after, priority, scheduler_entry_id, user_id""",
         *params,
     )
     await broadcast_queue_update(updated_job_id=job_id)
@@ -356,13 +365,13 @@ async def update_job(job_id: int, body: JobQueueUpdate):
 
 
 @router.patch("/{job_id}/acknowledge", response_model=JobQueueResponse)
-async def acknowledge_job(job_id: int):
+async def acknowledge_job(request: Request, job_id: int):
     r = await db.fetchrow(
         """UPDATE job_queue SET acknowledge_flag = TRUE WHERE job_queue_id = $1
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority, scheduler_entry_id""",
+                     run_after, priority, scheduler_entry_id, user_id""",
         job_id,
     )
     if not r:
@@ -373,18 +382,19 @@ async def acknowledge_job(job_id: int):
     if cid is not None:
         extra.append(f"channel_id={cid}")
     suffix = " (" + ", ".join(extra) + ")" if extra else ""
-    await log_event(f"Job {job_id} acknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+    user_id = getattr(request.state, "user_id", None)
+    await log_event(f"Job {job_id} acknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid, user_id=user_id)
     return row_to_job(r)
 
 
 @router.patch("/{job_id}/unacknowledge", response_model=JobQueueResponse)
-async def unacknowledge_job(job_id: int):
+async def unacknowledge_job(request: Request, job_id: int):
     r = await db.fetchrow(
         """UPDATE job_queue SET acknowledge_flag = FALSE WHERE job_queue_id = $1
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority, scheduler_entry_id""",
+                     run_after, priority, scheduler_entry_id, user_id""",
         job_id,
     )
     if not r:
@@ -395,18 +405,19 @@ async def unacknowledge_job(job_id: int):
     if cid is not None:
         extra.append(f"channel_id={cid}")
     suffix = " (" + ", ".join(extra) + ")" if extra else ""
-    await log_event(f"Job {job_id} unacknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+    user_id = getattr(request.state, "user_id", None)
+    await log_event(f"Job {job_id} unacknowledged{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid, user_id=user_id)
     return row_to_job(r)
 
 
 @router.post("/{job_id}/cancel", response_model=JobQueueResponse)
-async def cancel_job(job_id: int):
+async def cancel_job(request: Request, job_id: int):
     r = await db.fetchrow(
         """UPDATE job_queue SET status = 'cancelled' WHERE job_queue_id = $1 AND status = 'new'
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                     run_after, priority, scheduler_entry_id""",
+                     run_after, priority, scheduler_entry_id, user_id""",
         job_id,
     )
     if not r:
@@ -417,5 +428,6 @@ async def cancel_job(job_id: int):
     if cid is not None:
         extra.append(f"channel_id={cid}")
     suffix = " (" + ", ".join(extra) + ")" if extra else ""
-    await log_event(f"Job {job_id} cancelled{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+    user_id = getattr(request.state, "user_id", None)
+    await log_event(f"Job {job_id} cancelled{suffix}", SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid, user_id=user_id)
     return row_to_job(r)

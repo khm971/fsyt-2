@@ -65,7 +65,7 @@ async def get_channel_by_provider_key(provider_key: str):
     )
 
 
-async def resolve_channel_for_video(provider_key: str) -> tuple[int | None, str | None]:
+async def resolve_channel_for_video(provider_key: str, user_id: int | None = None) -> tuple[int | None, str | None]:
     """
     Resolve channel_id for a video from YouTube metadata.
     Finds or creates the channel; queues update_channel_info and download_channel_artwork for new channels.
@@ -81,9 +81,9 @@ async def resolve_channel_for_video(provider_key: str) -> tuple[int | None, str 
     if ch:
         return ch["channel_id"], None
     try:
-        channel_id = await add_channel_by_handle_or_key(provider_key=chan_yt_id)
-        await add_job("update_channel_info", channel_id=channel_id, priority=50)
-        await add_job("download_channel_artwork", channel_id=channel_id, priority=50)
+        channel_id = await add_channel_by_handle_or_key(provider_key=chan_yt_id, created_by_user_id=user_id)
+        await add_job("update_channel_info", channel_id=channel_id, priority=50, user_id=user_id)
+        await add_job("download_channel_artwork", channel_id=channel_id, priority=50, user_id=user_id)
         return channel_id, None
     except Exception as e:
         return None, str(e)
@@ -110,31 +110,33 @@ async def update_channel_info(channel_id: int, provider_key: str, handle: str, t
     )
 
 
-async def add_channel_by_handle_or_key(provider_key: str = None, handle: str = None):
+async def add_channel_by_handle_or_key(provider_key: str = None, handle: str = None, created_by_user_id: int | None = None):
     if not provider_key and not handle:
         raise ValueError("Need provider_key or handle")
     if provider_key and handle:
         raise ValueError("Provide only one of provider_key or handle")
     row = await db.fetchrow(
-        """INSERT INTO channel (provider_key, handle) VALUES ($1, $2) RETURNING channel_id""",
+        """INSERT INTO channel (provider_key, handle, created_by_user_id) VALUES ($1, $2, $3) RETURNING channel_id""",
         provider_key,
         handle,
+        created_by_user_id,
     )
     return row["channel_id"]
 
 
-async def add_video_if_not_exist(channel_id: int, provider_key: str, title: str, file_path: str, duration: int):
+async def add_video_if_not_exist(channel_id: int, provider_key: str, title: str, file_path: str, duration: int, created_by_user_id: int | None = None):
     existing = await db.fetchrow("SELECT video_id FROM video WHERE provider_key = $1", provider_key)
     if existing:
         return False, existing["video_id"]
     row = await db.fetchrow(
-        """INSERT INTO video (channel_id, provider_key, title, file_path, duration, status)
-           VALUES ($1, $2, $3, $4, $5, 'no_metadata') RETURNING video_id""",
+        """INSERT INTO video (channel_id, provider_key, title, file_path, duration, status, created_by_user_id)
+           VALUES ($1, $2, $3, $4, $5, 'no_metadata', $6) RETURNING video_id""",
         channel_id,
         provider_key,
         title,
         file_path,
         duration or 0,
+        created_by_user_id,
     )
     return True, row["video_id"]
 
@@ -262,14 +264,15 @@ async def cancel_missed_future_jobs(reason: str) -> int:
     return len(rows)
 
 
-async def add_job(job_type: str, video_id: int = None, channel_id: int = None, parameter: str = None, priority: int = 50):
+async def add_job(job_type: str, video_id: int = None, channel_id: int = None, parameter: str = None, priority: int = 50, user_id: int = None):
     await db.execute(
-        """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority) VALUES ($1, $2, $3, $4, 'new', $5)""",
+        """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id) VALUES ($1, $2, $3, $4, 'new', $5, $6)""",
         job_type,
         video_id,
         channel_id,
         parameter,
         priority,
+        user_id,
     )
 
 
@@ -293,12 +296,13 @@ async def get_pending_download_video_job_id(video_id: int) -> int | None:
     return row["job_queue_id"] if row else None
 
 
-async def add_video_job_to_queue(job_type: str, video_id: int, run_after=None, priority: int = 50):
+async def add_video_job_to_queue(job_type: str, video_id: int, run_after=None, priority: int = 50, user_id: int = None):
     await db.execute(
         """INSERT INTO job_queue (job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-           status, run_after, priority) VALUES ($1, $2, NULL, NULL, NULL, NULL, 'new', $3, $4)""",
+           status, run_after, priority, user_id) VALUES ($1, $2, NULL, NULL, NULL, NULL, 'new', $3, $4, $5)""",
         job_type,
         video_id,
         run_after,
         priority,
+        user_id,
     )

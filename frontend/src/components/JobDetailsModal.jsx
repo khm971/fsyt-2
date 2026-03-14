@@ -4,7 +4,7 @@ import { cn, formatDateTimeWithSeconds } from "../lib/utils";
 import {
   Plus, Download, FileSearch, Film, ListTodo, Settings, Play, Clock, CheckCircle,
   XCircle, AlertCircle, AlertTriangle, HelpCircle, CalendarClock, MessageCircle,
-  Hash, Users, Calendar, RefreshCw, Activity, ArrowUp, FileText, Braces, ClipboardList,
+  Hash, Users, User, Calendar, RefreshCw, Activity, ArrowUp, FileText, Braces, ClipboardList,
 } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 import Modal from "./Modal";
@@ -217,6 +217,19 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
                       </span>
                     </td>
                     <td className="py-1.5 text-white font-mono">{jobDetails.channel_id}</td>
+                  </tr>
+                )}
+                {(jobDetails.user_id != null || jobDetails.username != null) && (
+                  <tr>
+                    <td className="py-1.5 pr-4 text-gray-400 align-top">
+                      <span className="inline-flex items-center gap-1.5">
+                        <User className="w-4 h-4 shrink-0 text-gray-500" />
+                        Queued by
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-white">
+                      {jobDetails.username != null ? `${jobDetails.username} (ID ${jobDetails.user_id})` : `ID ${jobDetails.user_id}`}
+                    </td>
                   </tr>
                 )}
                 <tr>

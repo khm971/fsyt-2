@@ -15,6 +15,7 @@ import {
   ListTodo,
   Film,
   Users,
+  User,
   Settings,
   Cpu,
   Server,
@@ -243,6 +244,19 @@ export function LogEntryDetailsModal({
                     >
                       {entry.channel_id}
                     </button>
+                  </td>
+                </tr>
+              )}
+              {(entry.user_id != null || entry.username != null) && (
+                <tr>
+                  <td className="py-1.5 pr-4 text-gray-400 align-top w-40">
+                    <span className="inline-flex items-center gap-1.5">
+                      <User className="w-4 h-4 shrink-0 text-gray-500" />
+                      User
+                    </span>
+                  </td>
+                  <td className="py-1.5 text-white">
+                    {entry.username != null ? `${entry.username} (ID ${entry.user_id})` : `ID ${entry.user_id}`}
                   </td>
                 </tr>
               )}

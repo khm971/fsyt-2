@@ -1,5 +1,5 @@
 """Scheduler entry REST API."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from database import db
 from api.schemas import (
@@ -67,7 +67,7 @@ async def get_entry(entry_id: int):
 
 
 @router.post("", response_model=SchedulerEntryResponse, status_code=201)
-async def create_entry(body: SchedulerEntryCreate):
+async def create_entry(request: Request, body: SchedulerEntryCreate):
     """Create a scheduler entry. Validates cron and triggers scheduler reload."""
     _validate_cron(body.cron_expression)
     next_run = get_next_run_at(body.cron_expression)
@@ -91,16 +91,18 @@ async def create_entry(body: SchedulerEntryCreate):
         body.is_enabled,
         next_run if body.is_enabled else None,
     )
+    user_id = getattr(request.state, "user_id", None)
     await log_event(
         f"Scheduler entry created: {body.name!r} (id={r['scheduler_entry_id']}, job_type={body.job_type!r}, cron={body.cron_expression!r})",
         SEVERITY_INFO,
+        user_id=user_id,
     )
     await reload_scheduler()
     return _row_to_response(r)
 
 
 @router.patch("/{entry_id}", response_model=SchedulerEntryResponse)
-async def update_entry(entry_id: int, body: SchedulerEntryUpdate):
+async def update_entry(request: Request, entry_id: int, body: SchedulerEntryUpdate):
     """Update a scheduler entry. Validates cron if provided. Triggers scheduler reload."""
     existing = await db.fetchrow(
         """SELECT scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
@@ -155,9 +157,11 @@ async def update_entry(entry_id: int, body: SchedulerEntryUpdate):
         next_run,
         entry_id,
     )
+    user_id = getattr(request.state, "user_id", None)
     await log_event(
         f"Scheduler entry updated: {r['name']!r} (id={entry_id})",
         SEVERITY_INFO,
+        user_id=user_id,
     )
     await reload_scheduler()
     return _row_to_response(r)
@@ -174,7 +178,7 @@ async def run_now(entry_id: int):
 
 
 @router.delete("/{entry_id}", status_code=204)
-async def delete_entry(entry_id: int):
+async def delete_entry(request: Request, entry_id: int):
     """Delete a scheduler entry and trigger scheduler reload."""
     r = await db.fetchrow(
         "SELECT name FROM scheduler_entry WHERE scheduler_entry_id = $1",
@@ -184,6 +188,7 @@ async def delete_entry(entry_id: int):
         raise HTTPException(404, "Scheduler entry not found")
     name = r["name"]
     await db.execute("DELETE FROM scheduler_entry WHERE scheduler_entry_id = $1", entry_id)
-    await log_event(f"Scheduler entry deleted: {name!r} (id={entry_id})", SEVERITY_INFO)
+    user_id = getattr(request.state, "user_id", None)
+    await log_event(f"Scheduler entry deleted: {name!r} (id={entry_id})", SEVERITY_INFO, user_id=user_id)
     await reload_scheduler()
     return None

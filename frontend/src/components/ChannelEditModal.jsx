@@ -121,6 +121,14 @@ export function ChannelEditModal({ channelId, onClose, onSaved, setError }) {
               />
               <span className="text-gray-400">Auto download</span>
             </label>
+            {(channel.created_by_user_id != null || channel.created_by_username != null) && (
+              <div className="block pt-1">
+                <span className="text-gray-400 block mb-1">Created by</span>
+                <span className="text-white">
+                  {channel.created_by_username != null ? `${channel.created_by_username} (ID ${channel.created_by_user_id})` : `ID ${channel.created_by_user_id}`}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <button type="button" onClick={onClose} className="btn-secondary">

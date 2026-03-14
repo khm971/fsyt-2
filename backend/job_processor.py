@@ -7,10 +7,12 @@ from database import db
 
 
 def _format_run_after(run_after) -> str | None:
-    """Format run_after for log messages: day-of-week abbreviation, date and time with seconds, no fractional seconds."""
+    """Format run_after for log messages: day-of-week abbreviation, date and time with seconds, no fractional seconds. Displayed in local time."""
     if run_after is None:
         return None
     dt = run_after
+    if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+        dt = dt.astimezone()
     if hasattr(dt, "replace") and hasattr(dt, "microsecond"):
         dt = dt.replace(microsecond=0)
     return dt.strftime("%a, %b %d, %Y %H:%M:%S")
@@ -74,7 +76,7 @@ async def run_job_loop() -> None:
             )
             await ws_manager.broadcast({"type": "heartbeat", "value": heartbeat_value})
             row = await db.fetchrow(
-                """SELECT job_queue_id, job_type, video_id, channel_id, parameter, run_after
+                """SELECT job_queue_id, job_type, video_id, channel_id, parameter, run_after, user_id
                    FROM job_queue
                    WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())
                    ORDER BY priority DESC NULLS LAST, job_queue_id ASC
@@ -84,6 +86,7 @@ async def run_job_loop() -> None:
                 continue
             job_id = row["job_queue_id"]
             job_type = row["job_type"]
+            job_user_id = row.get("user_id")
             vid, cid, param = row.get("video_id"), row.get("channel_id"), row.get("parameter")
             started_extra = [f"video_id={vid}"] if vid is not None else []
             if cid is not None:
@@ -94,7 +97,7 @@ async def run_job_loop() -> None:
             run_after_str = _format_run_after(row.get("run_after"))
             if run_after_str:
                 started_msg += f"; scheduled to run after {run_after_str}"
-            await log_event(started_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+            await log_event(started_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid, user_id=job_user_id)
             await db_helpers.update_job_status(row["job_queue_id"], "running")
             await broadcast_queue_update(updated_job_id=row["job_queue_id"])
 
@@ -113,14 +116,14 @@ async def run_job_loop() -> None:
                             success, message, is_error = False, "Video not found", True
                         else:
                             if v.get("channel_id") is None:
-                                await log_event(f"Job {job_id} video {row['video_id']}: resolving channel for video", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=row.get("channel_id"))
-                                ch_id, err = await db_helpers.resolve_channel_for_video(v["provider_key"])
+                                await log_event(f"Job {job_id} video {row['video_id']}: resolving channel for video", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=row.get("channel_id"), user_id=job_user_id)
+                                ch_id, err = await db_helpers.resolve_channel_for_video(v["provider_key"], user_id=job_user_id)
                                 if ch_id:
                                     await db_helpers.update_video_channel_id(row["video_id"], ch_id)
                                 else:
                                     success, message, is_error = False, err or "Could not determine channel", True
                             if success is not False:
-                                await log_event(f"Job {job_id} video {row['video_id']}: starting download", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=v.get("channel_id"))
+                                await log_event(f"Job {job_id} video {row['video_id']}: starting download", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=v.get("channel_id"), user_id=job_user_id)
                                 ok, msg = await asyncio.to_thread(
                                     download_video_sync,
                                     row["video_id"],
@@ -138,14 +141,14 @@ async def run_job_loop() -> None:
                     if not row["video_id"]:
                         success, message, is_warning = False, "No video_id provided", True
                     else:
-                        err = await _run_get_metadata(row["video_id"], job_id=job_id, channel_id=cid)
+                        err = await _run_get_metadata(row["video_id"], job_id=job_id, channel_id=cid, user_id=job_user_id)
                         if err:
                             success, message, is_warning = False, err, True
 
                 elif job_type == "fill_missing_metadata":
                     max_v = int(row["parameter"] or 1) if row.get("parameter") else 1
-                    await log_event(f"Job {job_id}: starting fill_missing_metadata (max={max_v})", SEVERITY_DEBUG, job_id=job_id)
-                    await _run_fill_missing_metadata(max_v, job_id=job_id)
+                    await log_event(f"Job {job_id}: starting fill_missing_metadata (max={max_v})", SEVERITY_DEBUG, job_id=job_id, user_id=job_user_id)
+                    await _run_fill_missing_metadata(max_v, job_id=job_id, user_id=job_user_id)
 
                 elif job_type == "download_channel_artwork":
                     if not row["channel_id"]:
@@ -155,7 +158,7 @@ async def run_job_loop() -> None:
                         if not ch:
                             success, message, is_error = False, "Channel not found", True
                         else:
-                            await log_event(f"Job {job_id} channel {row['channel_id']}: starting channel artwork download", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
+                            await log_event(f"Job {job_id} channel {row['channel_id']}: starting channel artwork download", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"], user_id=job_user_id)
                             ok, err = await asyncio.to_thread(
                                 download_channel_artwork,
                                 ch["provider_key"] or "",
@@ -167,32 +170,32 @@ async def run_job_loop() -> None:
                             if not ok:
                                 success, message, is_warning = False, err or "Artwork download failed", True
                             else:
-                                await log_event(f"Job {job_id} channel {row['channel_id']}: channel artwork download finished", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
+                                await log_event(f"Job {job_id} channel {row['channel_id']}: channel artwork download finished", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"], user_id=job_user_id)
 
                 elif job_type == "download_one_channel":
                     if not row["channel_id"]:
                         success, message, is_error = False, "channel_id not provided", True
                     else:
                         max_v = int(row["parameter"] or 10) if row.get("parameter") else await db_helpers.get_control_int("max_new_videos_get_dflt", 10)
-                        await log_event(f"Job {job_id} channel {row['channel_id']}: fetching channel videos (max={max_v})", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
-                        err = await _run_download_one_channel(row["channel_id"], max_v, job_id=job_id)
+                        await log_event(f"Job {job_id} channel {row['channel_id']}: fetching channel videos (max={max_v})", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"], user_id=job_user_id)
+                        err = await _run_download_one_channel(row["channel_id"], max_v, job_id=job_id, user_id=job_user_id)
                         if err:
                             success, message, is_error = False, err, True
 
                 elif job_type == "download_auto_enabled_channels":
-                    await log_event(f"Job {job_id}: starting download_auto_enabled_channels", SEVERITY_DEBUG, job_id=job_id)
-                    await _run_download_auto_enabled_channels(job_id=job_id)
+                    await log_event(f"Job {job_id}: starting download_auto_enabled_channels", SEVERITY_DEBUG, job_id=job_id, user_id=job_user_id)
+                    await _run_download_auto_enabled_channels(job_id=job_id, user_id=job_user_id)
 
                 elif job_type == "update_channel_info":
                     if not row["channel_id"]:
                         success, message, is_error = False, "channel_id not provided", True
                     else:
-                        await log_event(f"Job {job_id} channel {row['channel_id']}: fetching channel info", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
+                        await log_event(f"Job {job_id} channel {row['channel_id']}: fetching channel info", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"], user_id=job_user_id)
                         ok = await _run_update_channel_info(row["channel_id"])
                         if not ok:
                             success, message, is_warning = False, "update_channel_info returned False", True
                         else:
-                            await log_event(f"Job {job_id} channel {row['channel_id']}: channel info updated", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"])
+                            await log_event(f"Job {job_id} channel {row['channel_id']}: channel info updated", SEVERITY_DEBUG, job_id=job_id, channel_id=row["channel_id"], user_id=job_user_id)
 
                 elif job_type == "add_video_from_frontend":
                     if not row.get("parameter"):
@@ -202,7 +205,7 @@ async def run_job_loop() -> None:
                         if not vid:
                             success, message, is_error = False, "Could not parse YouTube video ID from parameter", True
                         else:
-                            err = await _run_add_video_by_provider_key(vid, download_video=True)
+                            err = await _run_add_video_by_provider_key(vid, download_video=True, user_id=job_user_id)
                             if err:
                                 success, message, is_warning = False, err, True
 
@@ -214,7 +217,7 @@ async def run_job_loop() -> None:
                         if not vid:
                             success, message, is_error = False, "Could not parse YouTube video ID from parameter", True
                         else:
-                            err = await _run_add_video_by_provider_key(vid, download_video=False)
+                            err = await _run_add_video_by_provider_key(vid, download_video=False, user_id=job_user_id)
                         if err:
                             success, message, is_warning = False, err, True
 
@@ -225,7 +228,7 @@ async def run_job_loop() -> None:
                         success, message, is_warning = False, "transcode_video_for_ipad not implemented (Phase 3)", True
 
                 elif job_type == "queue_all_downloads":
-                    count = await _run_queue_all_downloads(job_id=job_id)
+                    count = await _run_queue_all_downloads(job_id=job_id, user_id=job_user_id)
                     success = True
                     message = f"Queued {count} download_video jobs"
 
@@ -260,6 +263,7 @@ async def run_job_loop() -> None:
                                 f"Trimmed job queue: deleted {deleted_count} record(s) older than {age_days} days",
                                 SEVERITY_INFO,
                                 job_id=job_id,
+                                user_id=job_user_id,
                             )
                             success = True
                             message = f"Trimmed {deleted_count} job(s) older than {age_days} days"
@@ -285,7 +289,7 @@ async def run_job_loop() -> None:
                 run_after_str = _format_run_after(row.get("run_after"))
                 if run_after_str:
                     completed_msg += f"; scheduled to run after {run_after_str}"
-                await log_event(completed_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid)
+                await log_event(completed_msg, SEVERITY_INFO, job_id=job_id, video_id=vid, channel_id=cid, user_id=job_user_id)
             else:
                 await db_helpers.mark_job_done_exception(job_id, message or "Error", is_warning=is_warning, is_error=is_error)
                 kind = "warning" if is_warning else "error"
@@ -300,7 +304,7 @@ async def run_job_loop() -> None:
                 run_after_str = _format_run_after(row.get("run_after"))
                 if run_after_str:
                     failed_msg += f"; scheduled to run after {run_after_str}"
-                await log_event(failed_msg, sev, job_id=job_id, video_id=vid, channel_id=cid)
+                await log_event(failed_msg, sev, job_id=job_id, video_id=vid, channel_id=cid, user_id=job_user_id)
             await broadcast_queue_update(updated_job_id=job_id)
             # Notify UI to refresh video list when a video-affecting job finished
             if row.get("video_id") and job_type in ("download_video", "get_metadata"):
@@ -323,17 +327,17 @@ async def run_job_loop() -> None:
                 run_after_str = _format_run_after(row.get("run_after"))
                 if run_after_str:
                     log_msg += f"; scheduled to run after {run_after_str}"
-            await log_event(log_msg, SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid)
+            await log_event(log_msg, SEVERITY_ERROR, job_id=job_id, video_id=vid, channel_id=cid, user_id=job_user_id if row else None)
             if job_id is not None:
                 await db_helpers.mark_job_done_exception(job_id, str(e)[:500], is_error=True)
                 await broadcast_queue_update(updated_job_id=job_id)
 
 
-async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id: int | None = None) -> str | None:
+async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id: int | None = None, user_id: int | None = None) -> str | None:
     v = await db_helpers.get_video_by_id(video_id)
     if not v:
         return "Video not found"
-    await log_event(f"Job {job_id or '?'} video {video_id}: getting video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
+    await log_event(f"Job {job_id or '?'} video {video_id}: getting video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id, user_id=user_id)
     await db_helpers.update_video_download_progress(video_id, "getting_metadata", 0)
     if job_id is not None:
         await db_helpers.update_job_status(job_id, "getting_metadata", None, 0)
@@ -345,7 +349,7 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
         if job_id is not None:
             await db_helpers.update_job_status(job_id, "error_getting_metadata", err, 0)
         return err or "Failed to get metadata"
-    await log_event(f"Job {job_id or '?'} video {video_id}: got video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
+    await log_event(f"Job {job_id or '?'} video {video_id}: got video info", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id, user_id=user_id)
     upload_date = info.get("fsyt_upload_date") or info.get("upload_date")
     duration = None
     if info.get("duration") is not None:
@@ -361,7 +365,7 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
         info.get("thumbnail") or "",
         duration=duration,
     )
-    await log_event(f"Job {job_id or '?'} video {video_id}: LLM processing", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
+    await log_event(f"Job {job_id or '?'} video {video_id}: LLM processing", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id, user_id=user_id)
     await db_helpers.update_video_download_progress(video_id, "llm_processing", 0)
     if job_id is not None:
         await db_helpers.update_job_status(job_id, "llm_processing", None, 0)
@@ -372,25 +376,25 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
         target_llm,
     )
     await db_helpers.update_video_llm_description(video_id, llm_desc)
-    await log_event(f"Job {job_id or '?'} video {video_id}: metadata available", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id)
+    await log_event(f"Job {job_id or '?'} video {video_id}: metadata available", SEVERITY_DEBUG, job_id=job_id, video_id=video_id, channel_id=channel_id, user_id=user_id)
     await db_helpers.update_video_download_progress(video_id, "metadata_available", 0)
     if job_id is not None:
         await db_helpers.update_job_status(job_id, "metadata_available", None, 0)
     return None
 
 
-async def _run_fill_missing_metadata(max_videos: int, job_id: int | None = None) -> None:
+async def _run_fill_missing_metadata(max_videos: int, job_id: int | None = None, user_id: int | None = None) -> None:
     videos = await db_helpers.get_videos_missing_metadata(max_videos)
     for i, v in enumerate(videos):
-        await log_event(f"Job {job_id or '?'}: processing video {i+1}/{len(videos)} (video_id={v['video_id']})", SEVERITY_DEBUG, job_id=job_id, video_id=v["video_id"], channel_id=v.get("channel_id"))
-        await _run_get_metadata(v["video_id"], job_id=job_id, channel_id=v.get("channel_id"))
+        await log_event(f"Job {job_id or '?'}: processing video {i+1}/{len(videos)} (video_id={v['video_id']})", SEVERITY_DEBUG, job_id=job_id, video_id=v["video_id"], channel_id=v.get("channel_id"), user_id=user_id)
+        await _run_get_metadata(v["video_id"], job_id=job_id, channel_id=v.get("channel_id"), user_id=user_id)
         await broadcast_video_updated(v["video_id"])
         sleep_s = await db_helpers.get_control_int("sleep_fill_missing_meta", 5)
         if sleep_s > 0:
             await asyncio.sleep(sleep_s)
 
 
-async def _run_queue_all_downloads(job_id: int | None = None) -> int:
+async def _run_queue_all_downloads(job_id: int | None = None, user_id: int | None = None) -> int:
     """Queue download_video jobs for all videos missing metadata. Returns count of jobs queued."""
     min_delay = await db_helpers.get_control_int("download_scheduler_min_delay", 60)
     max_delay = await db_helpers.get_control_int("download_scheduler_max_delay", 300)
@@ -400,6 +404,7 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
         f"Job {job_id or '?'}: starting queue_all_downloads (videos={len(videos)}, min_delay={min_delay}, max_delay={max_delay}, priority={priority})",
         SEVERITY_INFO,
         job_id=job_id,
+        user_id=user_id,
     )
     furthest = await db_helpers.get_furthest_scheduled_job()
     furthest_time = furthest["run_after"] if furthest and furthest.get("run_after") else None
@@ -424,10 +429,11 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
                 job_id=job_id,
                 video_id=video_id,
                 channel_id=v.get("channel_id"),
+                user_id=user_id,
             )
             continue
         await db_helpers.add_video_job_to_queue(
-            "download_video", video_id, run_after=next_scheduled, priority=priority
+            "download_video", video_id, run_after=next_scheduled, priority=priority, user_id=user_id
         )
         queued_count += 1
         delay = random.randint(min_delay, max_delay)
@@ -437,11 +443,12 @@ async def _run_queue_all_downloads(job_id: int | None = None) -> int:
         f"Job {job_id or '?'}: queued {queued_count} download_video jobs",
         SEVERITY_INFO,
         job_id=job_id,
+        user_id=user_id,
     )
     return queued_count
 
 
-async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: int | None = None) -> str | None:
+async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: int | None = None, user_id: int | None = None) -> str | None:
     ch = await db_helpers.get_channel_by_id(channel_id)
     if not ch:
         return f"Channel {channel_id} not found"
@@ -454,7 +461,7 @@ async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: in
     if err:
         return err
     if not entries:
-        await log_event(f"Job {job_id or '?'} channel {channel_id}: no new videos", SEVERITY_DEBUG, job_id=job_id, channel_id=channel_id)
+        await log_event(f"Job {job_id or '?'} channel {channel_id}: no new videos", SEVERITY_DEBUG, job_id=job_id, channel_id=channel_id, user_id=user_id)
         return None
     added = 0
     for e in entries:
@@ -466,19 +473,20 @@ async def _run_download_one_channel(channel_id: int, max_videos: int, job_id: in
             e.get("title"),
             None,
             e.get("duration") or 0,
+            created_by_user_id=user_id,
         )
         if added_now:
             added += 1
-    await log_event(f"Job {job_id or '?'} channel {channel_id}: added {added} new videos", SEVERITY_DEBUG, job_id=job_id, channel_id=channel_id)
+    await log_event(f"Job {job_id or '?'} channel {channel_id}: added {added} new videos", SEVERITY_DEBUG, job_id=job_id, channel_id=channel_id, user_id=user_id)
     return None
 
 
-async def _run_download_auto_enabled_channels(job_id: int | None = None) -> None:
+async def _run_download_auto_enabled_channels(job_id: int | None = None, user_id: int | None = None) -> None:
     channels = await db_helpers.get_auto_downloadenabled_channels()
     max_v = await db_helpers.get_control_int("max_new_videos_get_dflt", 10)
     for ch in channels:
-        await log_event(f"Job {job_id or '?'}: processing channel {ch['channel_id']} ({ch.get('title', ch.get('handle', ''))})", SEVERITY_DEBUG, job_id=job_id, channel_id=ch["channel_id"])
-        await _run_download_one_channel(ch["channel_id"], max_v, job_id=job_id)
+        await log_event(f"Job {job_id or '?'}: processing channel {ch['channel_id']} ({ch.get('title', ch.get('handle', ''))})", SEVERITY_DEBUG, job_id=job_id, channel_id=ch["channel_id"], user_id=user_id)
+        await _run_download_one_channel(ch["channel_id"], max_v, job_id=job_id, user_id=user_id)
 
 
 async def _run_update_channel_info(channel_id: int) -> bool:
@@ -519,7 +527,7 @@ async def _run_update_channel_info(channel_id: int) -> bool:
     return True
 
 
-async def _run_add_video_by_provider_key(provider_key: str, download_video: bool) -> str | None:
+async def _run_add_video_by_provider_key(provider_key: str, download_video: bool, user_id: int | None = None) -> str | None:
     existing = await db.fetchrow("SELECT video_id FROM video WHERE provider_key = $1", provider_key)
     if existing:
         return f"Video {provider_key} already exists"
@@ -534,21 +542,22 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
         channel_id = ch["channel_id"]
     else:
         try:
-            channel_id = await db_helpers.add_channel_by_handle_or_key(provider_key=chan_yt_id)
-            await db_helpers.add_job("update_channel_info", channel_id=channel_id, priority=50)
-            await db_helpers.add_job("download_channel_artwork", channel_id=channel_id, priority=50)
+            channel_id = await db_helpers.add_channel_by_handle_or_key(provider_key=chan_yt_id, created_by_user_id=user_id)
+            await db_helpers.add_job("update_channel_info", channel_id=channel_id, priority=50, user_id=user_id)
+            await db_helpers.add_job("download_channel_artwork", channel_id=channel_id, priority=50, user_id=user_id)
         except Exception as e:
             await log_event(
                 f"Add video (create channel) failed: provider_key={chan_yt_id!r} error={type(e).__name__}: {e}",
                 SEVERITY_ERROR,
                 channel_id=None,
+                user_id=user_id,
             )
             return str(e)
-    added, new_id = await db_helpers.add_video_if_not_exist(channel_id, provider_key, None, None, None)
+    added, new_id = await db_helpers.add_video_if_not_exist(channel_id, provider_key, None, None, None, created_by_user_id=user_id)
     if not added:
         return "add_video_if_not_exist failed"
     if download_video:
-        await db_helpers.add_job("download_video", video_id=new_id, priority=40)
+        await db_helpers.add_job("download_video", video_id=new_id, priority=40, user_id=user_id)
     return None
 
 

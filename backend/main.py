@@ -35,6 +35,8 @@ from api.maintenance import router as maintenance_router
 from api.status import router as status_router
 from api.scheduler import router as scheduler_router
 from api.information import router as information_router
+from api.users import router as users_router
+from session import SessionMiddleware, get_user_id_from_scope
 from scheduler_service import start_scheduler, shutdown_scheduler
 from startup_cleanup import run_startup_cleanup
 from backend_instance_context import set_backend_instance
@@ -286,6 +288,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SessionMiddleware)
 
 app.include_router(channels_router, prefix="/api")
 app.include_router(tags_router, prefix="/api")
@@ -298,6 +301,7 @@ app.include_router(maintenance_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(information_router, prefix="/api")
+app.include_router(users_router, prefix="/api")
 
 
 @app.get("/health")
@@ -322,7 +326,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.get("type") == "watch_progress" and isinstance(msg.get("video_id"), int):
                     progress_seconds = int(msg.get("progress_seconds", 0))
                     progress_percent = float(msg.get("progress_percent", 0))
-                    await _save_watch_progress(msg["video_id"], progress_seconds, progress_percent)
+                    user_id = get_user_id_from_scope(websocket.scope)
+                    await _save_watch_progress(msg["video_id"], progress_seconds, progress_percent, user_id)
             except (json.JSONDecodeError, ValueError, TypeError) as e:
                 await log_event(
                     f"WebSocket invalid message: error={type(e).__name__}: {e} payload_trimmed={repr(text[:500])}",

@@ -13,6 +13,7 @@ async function apiFetch(path, options = {}) {
   const url = `${API.replace(/\/$/, "")}${path}`;
   const res = await fetch(url, {
     ...options,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...options.headers,
@@ -26,6 +27,17 @@ async function apiFetch(path, options = {}) {
 
 export const api = {
   health: () => apiFetch("/health"),
+  me: () => apiFetch("/me"),
+  users: {
+    list: (params = {}) => {
+      const q = new URLSearchParams();
+      if (params.enabled != null) q.set("enabled", String(params.enabled));
+      const query = q.toString();
+      return apiFetch(`/users${query ? `?${query}` : ""}`);
+    },
+  },
+  switchUser: (userId) =>
+    apiFetch("/switch-user", { method: "POST", body: JSON.stringify({ user_id: userId }) }),
 
   tags: {
     list: () => apiFetch("/tags"),

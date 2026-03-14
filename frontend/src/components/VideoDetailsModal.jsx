@@ -4,6 +4,7 @@ import { cn, formatDateTime, formatDateTimeWithSeconds, formatDurationSeconds } 
 import {
   Hash,
   Users,
+  User,
   FileText,
   Calendar,
   Clock,
@@ -297,6 +298,19 @@ export function VideoDetailsModal({
                               )}
                             </span>
                           )}
+                        </td>
+                      </tr>
+                    )}
+                    {(video.created_by_user_id != null || video.created_by_username != null) && (
+                      <tr>
+                        <td className="py-1.5 pr-4 text-gray-400 align-top">
+                          <span className="inline-flex items-center gap-1.5">
+                            <User className="w-4 h-4 shrink-0 text-gray-500" />
+                            Created by
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-white">
+                          {video.created_by_username != null ? `${video.created_by_username} (ID ${video.created_by_user_id})` : `ID ${video.created_by_user_id}`}
                         </td>
                       </tr>
                     )}

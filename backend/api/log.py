@@ -19,6 +19,10 @@ def row_to_log(r):
         "channel_id": r.get("channel_id"),
         "subsystem": r.get("subsystem"),
     }
+    if r.get("user_id") is not None:
+        out["user_id"] = r["user_id"]
+    if r.get("username") is not None:
+        out["username"] = r["username"]
     if "instance_id" in r and r["instance_id"] is not None:
         out["instance_id"] = str(r["instance_id"])
     if "hostname" in r and r["hostname"] is not None:
@@ -40,11 +44,11 @@ async def list_log(
     params = []
     i = 1
     if video_id is not None:
-        conditions.append(f"video_id = ${i}")
+        conditions.append(f"e.video_id = ${i}")
         params.append(video_id)
         i += 1
     if min_severity is not None:
-        conditions.append(f"severity >= ${i}")
+        conditions.append(f"e.severity >= ${i}")
         params.append(min_severity)
         i += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -68,12 +72,13 @@ async def list_log(
     direction = "ASC" if sort_order == "asc" else "DESC"
     nulls_last_cols = {"job_id", "video_id", "channel_id"}
     nulls_clause = " NULLS LAST" if sort_col in nulls_last_cols else ""
-    order_clause = f"ORDER BY {sort_col} {direction}{nulls_clause}, event_log_id {direction}"
+    order_clause = f"ORDER BY e.{sort_col} {direction}{nulls_clause}, e.event_log_id {direction}"
 
     params.extend([limit, offset])
     rows = await db.fetch(
-        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id, subsystem
-            FROM event_log
+        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username
+            FROM event_log e
+            LEFT JOIN app_user u ON e.user_id = u.user_id
             {where}
             {order_clause}
             LIMIT ${i} OFFSET ${i + 1}""",
@@ -81,7 +86,7 @@ async def list_log(
     )
     count_params = params[:-2]
     total = await db.fetchval(
-        f"SELECT COUNT(*) FROM event_log {where}",
+        f"SELECT COUNT(*) FROM event_log e {where}",
         *count_params,
     )
     return {
@@ -103,20 +108,21 @@ async def recent_log(
     params = []
     i = 1
     if video_id is not None:
-        conditions.append(f"video_id = ${i}")
+        conditions.append(f"e.video_id = ${i}")
         params.append(video_id)
         i += 1
     if min_severity is not None:
-        conditions.append(f"severity >= ${i}")
+        conditions.append(f"e.severity >= ${i}")
         params.append(min_severity)
         i += 1
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     rows = await db.fetch(
-        f"""SELECT event_log_id, event_time, message, severity, acknowledged, job_id, video_id, channel_id, subsystem
-            FROM event_log
+        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username
+            FROM event_log e
+            LEFT JOIN app_user u ON e.user_id = u.user_id
             {where}
-            ORDER BY event_time DESC
+            ORDER BY e.event_time DESC
             LIMIT ${i}""",
         *params,
     )
@@ -125,11 +131,13 @@ async def recent_log(
 
 @router.get("/{event_log_id}")
 async def get_log_entry(event_log_id: int):
-    """Get a single log entry by id with all fields (including instance_id, hostname)."""
+    """Get a single log entry by id with all fields (including instance_id, hostname, user_id, username)."""
     row = await db.fetchrow(
-        """SELECT event_log_id, event_time, message, severity, acknowledged,
-                  job_id, video_id, channel_id, subsystem, instance_id, hostname
-           FROM event_log WHERE event_log_id = $1""",
+        """SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged,
+                  e.job_id, e.video_id, e.channel_id, e.subsystem, e.instance_id, e.hostname, e.user_id, u.username
+           FROM event_log e
+           LEFT JOIN app_user u ON e.user_id = u.user_id
+           WHERE e.event_log_id = $1""",
         event_log_id,
     )
     if not row:

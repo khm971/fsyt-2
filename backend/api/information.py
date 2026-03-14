@@ -1,5 +1,5 @@
 """System information / stats API for the admin Information page."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from database import db
 
@@ -7,9 +7,10 @@ router = APIRouter(prefix="/information", tags=["information"])
 
 
 @router.get("")
-async def get_information():
-    """Return aggregate system stats in one response for the admin Information page."""
-    # Single query with scalar subqueries to get all counts and oldest timestamps
+async def get_information(request: Request):
+    """Return aggregate system stats in one response for the admin Information page. user_video counts are for current user."""
+    user_id = request.state.user_id
+    # Single query with scalar subqueries; user_video counts filtered by current user
     row = await db.fetchrow(
         """
         SELECT
@@ -24,9 +25,10 @@ async def get_information():
             (SELECT COUNT(*) FROM scheduler_entry)::int AS scheduler_total,
             (SELECT COUNT(*) FROM scheduler_entry WHERE is_enabled = TRUE)::int AS scheduler_enabled,
             (SELECT COUNT(*) FROM channel)::int AS channel_total,
-            (SELECT COUNT(*) FROM user_video WHERE is_finished = TRUE)::int AS videos_watched_to_completion,
-            (SELECT COUNT(*) FROM user_video WHERE (progress_seconds > 0 OR progress_percent > 0) AND is_finished = FALSE)::int AS videos_watch_in_progress
-        """
+            (SELECT COUNT(*) FROM user_video WHERE user_id = $1 AND is_finished = TRUE)::int AS videos_watched_to_completion,
+            (SELECT COUNT(*) FROM user_video WHERE user_id = $1 AND (progress_seconds > 0 OR progress_percent > 0) AND is_finished = FALSE)::int AS videos_watch_in_progress
+        """,
+        user_id,
     )
     return {
         "event_log_total": row["event_log_total"] or 0,

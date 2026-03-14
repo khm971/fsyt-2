@@ -6,7 +6,7 @@ import re
 import shlex
 import shutil
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from database import db
@@ -14,8 +14,6 @@ from services.tools import get_media_root
 from pydantic import BaseModel
 from api.schemas import VideoCreate, VideoUpdate, VideoResponse, VideoListResponse, TagResponse
 from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_WARNING, SEVERITY_ERROR
-
-USER_ID = 1  # No login; assume single user
 
 # HLS transcode cache: video_id -> { dir, proc, ready }
 _hls_cache: dict[int, dict] = {}
@@ -66,11 +64,14 @@ def row_to_video(r) -> VideoResponse:
         watch_is_finished=r.get("watch_is_finished"),
         pending_job_id=r.get("pending_job_id"),
         pending_job_type=r.get("pending_job_type"),
+        created_by_user_id=r.get("created_by_user_id"),
+        created_by_username=r.get("created_by_username"),
     )
 
 
 @router.get("", response_model=VideoListResponse)
 async def list_videos(
+    request: Request,
     channel_id: int | None = Query(None),
     include_ignored: bool = Query(False),
     limit: int = Query(200, le=500),
@@ -78,6 +79,7 @@ async def list_videos(
     sort_by: str = Query("id", pattern="^(id|title|status)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
+    user_id = request.state.user_id
     count_where_parts = ["1=1"]
     count_params: list = []
     ci = 1
@@ -93,7 +95,7 @@ async def list_videos(
     total = await db.fetchval(count_q, *count_params) or 0
 
     main_where_parts = ["1=1"]
-    params: list = [USER_ID]
+    params: list = [user_id]
     i = 2
     if channel_id is not None:
         main_where_parts.append(f"v.channel_id = ${i}")
@@ -108,9 +110,11 @@ async def list_videos(
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
-                  uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished
+                  uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
+                  v.created_by_user_id, u.username AS created_by_username
            FROM video v
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
+           LEFT JOIN app_user u ON v.created_by_user_id = u.user_id
            LEFT JOIN LATERAL (
              SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
@@ -125,14 +129,15 @@ async def list_videos(
     rows = await db.fetch(q, *params)
     videos = [row_to_video(r) for r in rows]
     if videos:
-        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
+        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos], user_id)
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
     return VideoListResponse(videos=videos, total=int(total))
 
 
 @router.get("/watch", response_model=list[VideoResponse])
-async def list_watch_in_progress(limit: int = Query(250, le=500)):
-    """Videos user has started but not finished, sorted by last_watched DESC. User ID 1."""
+async def list_watch_in_progress(request: Request, limit: int = Query(250, le=500)):
+    """Videos current user has started but not finished, sorted by last_watched DESC."""
+    user_id = request.state.user_id
     q = """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
@@ -153,25 +158,28 @@ async def list_watch_in_progress(limit: int = Query(250, le=500)):
              AND (v.is_ignore IS NOT TRUE)
            ORDER BY uv.last_watched DESC NULLS LAST
            LIMIT $2"""
-    rows = await db.fetch(q, USER_ID, limit)
+    rows = await db.fetch(q, user_id, limit)
     videos = [row_to_video(r) for r in rows]
     if videos:
-        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
+        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos], user_id)
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
     return videos
 
 
 @router.get("/by-tags", response_model=list[VideoResponse])
 async def list_videos_by_tags(
+    request: Request,
     tag_ids: list[int] = Query(..., min_length=1),
     tag_match: str = Query("any", pattern="^(all|any)$"),
     include_unavailable: bool = Query(False),
     limit: int = Query(250, le=500),
 ):
     """Videos that have the given tags (all or any). Returns same shape as watch list with watch progress."""
+    user_id = getattr(request.state, "user_id", None)
     await log_event(
         f"Videos by tags: tag_ids={tag_ids!r} tag_match={tag_match!r} include_unavailable={include_unavailable!r}",
         SEVERITY_LOW_LEVEL,
+        user_id=user_id,
     )
     tag_ids = list(dict.fromkeys(tag_ids))  # dedupe preserving order
     n_tags = len(tag_ids)
@@ -196,7 +204,7 @@ async def list_videos_by_tags(
            WHERE (v.is_ignore IS NOT TRUE){status_filter}
            ORDER BY v.video_id DESC
            LIMIT $3"""
-        rows = await db.fetch(q, tag_ids, USER_ID, limit)
+        rows = await db.fetch(q, tag_ids, request.state.user_id, limit)
     else:
         q = f"""SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
@@ -222,10 +230,10 @@ async def list_videos_by_tags(
            HAVING COUNT(DISTINCT vt.tag_id) = $3
            ORDER BY v.video_id DESC
            LIMIT $4"""
-        rows = await db.fetch(q, tag_ids, USER_ID, n_tags, limit)
+        rows = await db.fetch(q, tag_ids, request.state.user_id, n_tags, limit)
     videos = [row_to_video(r) for r in rows]
     if videos:
-        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
+        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos], request.state.user_id)
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
     return videos
 
@@ -237,11 +245,13 @@ def _escape_ilike(term: str) -> str:
 
 @router.get("/search", response_model=list[VideoResponse])
 async def search_videos(
+    request: Request,
     q: str = Query(""),
     include_unavailable: bool = Query(False),
     limit: int = Query(250, le=500),
 ):
     """Videos where all search terms appear in title, description, or llm_description_1. Terms split on commas and spaces."""
+    user_id = request.state.user_id
     terms = [s.strip() for s in re.split(r"[\s,]+", q) if s.strip()]
     if not terms:
         return []
@@ -266,17 +276,17 @@ async def search_videos(
     # Each term must match in at least one of title, description, llm_description_1
     conds = []
     for i in range(len(patterns)):
-        idx = i + 2  # $1 is USER_ID
+        idx = i + 2  # $1 is user_id
         conds.append(
             f"(v.title ILIKE ${idx} ESCAPE E'\\\\' OR COALESCE(v.description,'') ILIKE ${idx} ESCAPE E'\\\\' OR COALESCE(v.llm_description_1,'') ILIKE ${idx} ESCAPE E'\\\\')"
         )
     limit_idx = len(patterns) + 2
     sql = f"{base} AND " + " AND ".join(conds) + f" ORDER BY v.video_id DESC LIMIT ${limit_idx}"
-    params = [USER_ID, *patterns, limit]
+    params = [user_id, *patterns, limit]
     rows = await db.fetch(sql, *params)
     videos = [row_to_video(r) for r in rows]
     if videos:
-        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos])
+        tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos], user_id)
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
     return videos
 
@@ -674,12 +684,13 @@ async def stream_video(video_id: int, transcode: bool = Query(False)):
 
 
 @router.get("/{video_id}/watch-progress")
-async def get_watch_progress(video_id: int):
-    """Get user's watch progress for a video. User ID is always 1."""
+async def get_watch_progress(request: Request, video_id: int):
+    """Get current user's watch progress for a video."""
+    user_id = request.state.user_id
     r = await db.fetchrow(
         """SELECT progress_seconds, progress_percent, is_watched, is_finished
            FROM user_video WHERE user_id = $1 AND video_id = $2""",
-        USER_ID,
+        user_id,
         video_id,
     )
     if not r:
@@ -692,8 +703,8 @@ async def get_watch_progress(video_id: int):
     }
 
 
-async def _save_watch_progress(video_id: int, progress_seconds: int, progress_percent: float) -> None:
-    """Persist watch progress to DB. User ID is always 1."""
+async def _save_watch_progress(video_id: int, progress_seconds: int, progress_percent: float, user_id: int) -> None:
+    """Persist watch progress to DB for the given user_id."""
     pct = min(100, max(0, round(progress_percent, 2)))
     is_finished = pct > 95
     await db.execute(
@@ -705,7 +716,7 @@ async def _save_watch_progress(video_id: int, progress_seconds: int, progress_pe
              progress_percent = EXCLUDED.progress_percent,
              is_finished = EXCLUDED.is_finished,
              last_watched = NOW()""",
-        USER_ID,
+        user_id,
         video_id,
         progress_seconds,
         pct,
@@ -714,9 +725,9 @@ async def _save_watch_progress(video_id: int, progress_seconds: int, progress_pe
 
 
 @router.put("/{video_id}/watch-progress")
-async def update_watch_progress(video_id: int, body: WatchProgressUpdate):
-    """Create or update user's watch progress. User ID is always 1."""
-    await _save_watch_progress(video_id, body.progress_seconds, body.progress_percent)
+async def update_watch_progress(request: Request, video_id: int, body: WatchProgressUpdate):
+    """Create or update current user's watch progress."""
+    await _save_watch_progress(video_id, body.progress_seconds, body.progress_percent, request.state.user_id)
     return {"ok": True}
 
 
@@ -734,8 +745,8 @@ def _row_to_tag(r) -> TagResponse:
     )
 
 
-async def _fetch_tags_for_videos(video_ids: list[int]) -> dict[int, list[TagResponse]]:
-    """Return mapping of video_id -> list of TagResponse for the given video IDs."""
+async def _fetch_tags_for_videos(video_ids: list[int], user_id: int) -> dict[int, list[TagResponse]]:
+    """Return mapping of video_id -> list of TagResponse for the given video IDs and user."""
     if not video_ids:
         return {}
     rows = await db.fetch(
@@ -746,7 +757,7 @@ async def _fetch_tags_for_videos(video_ids: list[int]) -> dict[int, list[TagResp
            WHERE vt.video_id = ANY($1) AND t.user_id = $2
            ORDER BY vt.video_id, t.title""",
         video_ids,
-        USER_ID,
+        user_id,
     )
     out = {}
     for r in rows:
@@ -758,8 +769,9 @@ async def _fetch_tags_for_videos(video_ids: list[int]) -> dict[int, list[TagResp
 
 
 @router.get("/{video_id}/tags", response_model=list[TagResponse])
-async def get_video_tags(video_id: int):
+async def get_video_tags(request: Request, video_id: int):
     """List tags attached to this video for the current user."""
+    user_id = request.state.user_id
     vid = await db.fetchrow("SELECT video_id FROM video WHERE video_id = $1", video_id)
     if not vid:
         raise HTTPException(404, "Video not found")
@@ -771,14 +783,15 @@ async def get_video_tags(video_id: int):
            WHERE t.user_id = $2
            ORDER BY t.title""",
         video_id,
-        USER_ID,
+        user_id,
     )
     return [_row_to_tag(r) for r in rows]
 
 
 @router.post("/{video_id}/tags", response_model=list[TagResponse], status_code=201)
-async def add_video_tag(video_id: int, body: VideoTagAdd):
+async def add_video_tag(request: Request, video_id: int, body: VideoTagAdd):
     """Add a tag to the video. Provide tag_id or title (creates tag if missing)."""
+    user_id = request.state.user_id
     if (body.tag_id is None) == (body.title is None or not (body.title or "").strip()):
         raise HTTPException(400, "Provide exactly one of tag_id or title")
     vid = await db.fetchrow("SELECT video_id FROM video WHERE video_id = $1", video_id)
@@ -789,7 +802,7 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
         r = await db.fetchrow(
             "SELECT tag_id, user_id, title, bg_color, fg_color, icon_before, icon_after, is_system FROM tag WHERE tag_id = $1 AND user_id = $2",
             tag_id,
-            USER_ID,
+            user_id,
         )
         if not r:
             raise HTTPException(404, "Tag not found")
@@ -798,7 +811,7 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
         r = await db.fetchrow(
             """SELECT tag_id, user_id, title, bg_color, fg_color, icon_before, icon_after, is_system
                FROM tag WHERE user_id = $1 AND LOWER(title) = LOWER($2)""",
-            USER_ID,
+            user_id,
             title,
         )
         if not r:
@@ -806,10 +819,10 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
                 """INSERT INTO tag (user_id, title, bg_color, fg_color, is_system)
                    VALUES ($1, $2, '#111827', '#f3f4f6', FALSE)
                    RETURNING tag_id, user_id, title, bg_color, fg_color, icon_before, icon_after, is_system""",
-                USER_ID,
+                user_id,
                 title,
             )
-            await log_event(f"Tag created: {title} (tag_id={r['tag_id']})", SEVERITY_DEBUG)
+            await log_event(f"Tag created: {title} (tag_id={r['tag_id']})", SEVERITY_DEBUG, user_id=user_id)
         tag_id = r["tag_id"]
     await db.execute(
         """INSERT INTO video_tag (video_id, tag_id) VALUES ($1, $2)
@@ -823,6 +836,7 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
         SEVERITY_DEBUG,
         video_id=video_id,
         channel_id=channel_id,
+        user_id=user_id,
     )
     rows = await db.fetch(
         """SELECT t.tag_id, t.user_id, t.title, t.bg_color, t.fg_color, t.icon_before, t.icon_after, t.is_system,
@@ -832,18 +846,19 @@ async def add_video_tag(video_id: int, body: VideoTagAdd):
            WHERE t.user_id = $2
            ORDER BY t.title""",
         video_id,
-        USER_ID,
+        user_id,
     )
     return [_row_to_tag(r) for r in rows]
 
 
 @router.delete("/{video_id}/tags/{tag_id}", status_code=204)
-async def remove_video_tag(video_id: int, tag_id: int):
+async def remove_video_tag(request: Request, video_id: int, tag_id: int):
     """Remove a tag from the video."""
+    user_id = request.state.user_id
     r = await db.fetchrow(
         "SELECT tag_id FROM tag WHERE tag_id = $1 AND user_id = $2",
         tag_id,
-        USER_ID,
+        user_id,
     )
     if not r:
         raise HTTPException(404, "Tag not found")
@@ -865,6 +880,7 @@ async def remove_video_tag(video_id: int, tag_id: int):
         SEVERITY_DEBUG,
         video_id=video_id,
         channel_id=channel_id,
+        user_id=user_id,
     )
 
 
@@ -875,8 +891,10 @@ async def get_video(video_id: int):
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
-                  v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written
+                  v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
+                  v.created_by_user_id, u.username AS created_by_username
            FROM video v
+           LEFT JOIN app_user u ON v.created_by_user_id = u.user_id
            LEFT JOIN LATERAL (
              SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
@@ -891,7 +909,7 @@ async def get_video(video_id: int):
 
 
 @router.post("", response_model=VideoResponse, status_code=201)
-async def create_video(body: VideoCreate):
+async def create_video(request: Request, body: VideoCreate):
     provider_key = parse_youtube_video_id(body.provider_key)
     if not provider_key:
         raise HTTPException(
@@ -903,33 +921,36 @@ async def create_video(body: VideoCreate):
     )
     if existing:
         return await get_video(existing["video_id"])
-    channel_id, err = await db_helpers.resolve_channel_for_video(provider_key)
+    user_id = request.state.user_id
+    channel_id, err = await db_helpers.resolve_channel_for_video(provider_key, user_id=user_id)
     if not channel_id:
         raise HTTPException(400, err or "Could not determine channel from video")
     row = await db.fetchrow(
-        """INSERT INTO video (provider_key, channel_id, status)
-           VALUES ($1, $2, 'no_metadata')
+        """INSERT INTO video (provider_key, channel_id, status, created_by_user_id)
+           VALUES ($1, $2, 'no_metadata', $3)
            RETURNING video_id, provider_key, channel_id, title, upload_date, description,
                      llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
                      record_created, status,
                      status_message, is_ignore, metadata_last_updated, nfo_last_written""",
         provider_key,
         channel_id,
+        user_id,
     )
     new_job_id = None
     if body.queue_download:
         job_row = await db.fetchrow(
-            """INSERT INTO job_queue (job_type, video_id, status, priority)
-               VALUES ('download_video', $1, 'new', 40)
+            """INSERT INTO job_queue (job_type, video_id, status, priority, user_id)
+               VALUES ('download_video', $1, 'new', 40, $2)
                RETURNING job_queue_id""",
             row["video_id"],
+            user_id,
         )
         if job_row:
             new_job_id = job_row["job_queue_id"]
     if getattr(body, "tag_needs_review", True):
         tag_row = await db.fetchrow(
             """SELECT tag_id FROM tag WHERE user_id = $1 AND LOWER(title) = 'needs review'""",
-            USER_ID,
+            user_id,
         )
         if tag_row:
             await db.execute(
@@ -943,17 +964,18 @@ async def create_video(body: VideoCreate):
                 SEVERITY_INFO,
                 video_id=row["video_id"],
                 channel_id=row.get("channel_id"),
+                user_id=user_id,
             )
     await broadcast_queue_update(updated_job_id=new_job_id)
     created_extra = f"video_id={row['video_id']}"
     if channel_id is not None:
         created_extra += f", channel_id={channel_id}"
-    await log_event(f"Video created: {provider_key} ({created_extra})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id)
+    await log_event(f"Video created: {provider_key} ({created_extra})", SEVERITY_INFO, video_id=row["video_id"], channel_id=channel_id, user_id=user_id)
     return row_to_video(dict(row, status_percent_complete=None))
 
 
 @router.patch("/{video_id}", response_model=VideoResponse)
-async def update_video(video_id: int, body: VideoUpdate):
+async def update_video(request: Request, video_id: int, body: VideoUpdate):
     updates = []
     values = []
     i = 1
@@ -985,18 +1007,21 @@ async def update_video(video_id: int, body: VideoUpdate):
     if body.is_ignore is not None:
         label = "ignored" if body.is_ignore else "unignored"
         title_or_key = r.get("title") or r.get("provider_key") or f"video_id={video_id}"
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             f"Video {label}: video_id={video_id} ({title_or_key})",
             SEVERITY_NOTICE,
             video_id=video_id,
             channel_id=r.get("channel_id"),
+            user_id=user_id,
         )
     return row_to_video(dict(r, status_percent_complete=None))
 
 
 @router.delete("/{video_id}", status_code=204)
-async def delete_video(video_id: int):
+async def delete_video(request: Request, video_id: int):
     r = await db.fetchrow("SELECT provider_key, channel_id FROM video WHERE video_id = $1", video_id)
     await db.execute("DELETE FROM video WHERE video_id = $1", video_id)
     if r:
-        await log_event(f"Video deleted: {r['provider_key']} (video_id={video_id})", SEVERITY_INFO, video_id=video_id, channel_id=r.get("channel_id"))
+        user_id = getattr(request.state, "user_id", None)
+        await log_event(f"Video deleted: {r['provider_key']} (video_id={video_id})", SEVERITY_INFO, video_id=video_id, channel_id=r.get("channel_id"), user_id=user_id)

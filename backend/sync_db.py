@@ -98,6 +98,7 @@ def log_event_sync(
     video_id: int | None = None,
     channel_id: int | None = None,
     subsystem: str | None = None,
+    user_id: int | None = None,
 ) -> None:
     """Write an event to the event_log table from sync/thread code. When video_id is set and channel_id is not, looks up channel_id from the video row."""
     try:
@@ -112,9 +113,9 @@ def log_event_sync(
                     if row and row[0] is not None:
                         channel_id = row[0]
                 cur.execute(
-                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem)
-                       VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s)""",
-                    ((message or "")[:4096], severity, job_id, video_id, channel_id, subsystem),
+                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem, user_id)
+                       VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s)""",
+                    ((message or "")[:4096], severity, job_id, video_id, channel_id, subsystem, user_id),
                 )
     except Exception:
         pass  # Don't let logging failures break the app

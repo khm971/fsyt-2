@@ -1,5 +1,5 @@
 """Control (key-value settings) REST API."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from database import db
 from api.schemas import ControlSet, ControlResponse
@@ -41,7 +41,7 @@ async def get_control(key: str):
 
 
 @router.put("/{key}", response_model=ControlResponse)
-async def set_control(key: str, body: ControlSet):
+async def set_control(request: Request, key: str, body: ControlSet):
     r = await db.fetchrow(
         """INSERT INTO control (key, index, value, last_update)
            VALUES ($1, 0, $2, NOW())
@@ -52,9 +52,11 @@ async def set_control(key: str, body: ControlSet):
     )
     if key == "queue_paused":
         is_paused = str(body.value).strip().lower() in ("true", "1", "t", "yes")
+        user_id = getattr(request.state, "user_id", None)
         await log_event(
             "Queue paused" if is_paused else "Queue resumed",
             SEVERITY_NOTICE,
+            user_id=user_id,
         )
         await broadcast_queue_update()
     return ControlResponse(

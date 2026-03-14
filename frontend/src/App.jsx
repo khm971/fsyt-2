@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { useQueueWebSocket } from "./context/QueueWebSocketContext";
 import { ToastProvider } from "./context/ToastContext";
+import { UserProvider, useUser } from "./context/UserContext";
+import { HeaderUserMenu } from "./components/HeaderUserMenu";
 import Watch from "./pages/Watch";
 import Dashboard from "./pages/Dashboard";
 import Channels from "./pages/Channels";
@@ -63,9 +65,11 @@ function Nav() {
   );
 }
 
-export default function App() {
+/** Inner layout that has access to UserContext; keys main content so it remounts on user switch or reconnect. */
+function AppLayout() {
   const [error, setError] = useState(null);
   const { status, reconnectedAt, multipleInstances } = useQueueWebSocket();
+  const { currentUser } = useUser();
   const connectionLost = status === "closed";
 
   useEffect(() => {
@@ -78,47 +82,58 @@ export default function App() {
   const displayMessage = isConnectionError ? "Connection to server lost" : error;
 
   return (
-    <ToastProvider>
-    <BrowserRouter>
-      <div className="min-h-screen bg-gray-950 text-gray-200 flex flex-col overflow-x-hidden">
-        <header className="border-b border-gray-800 bg-gray-900/80 sticky top-0 z-10">
-          <div className="flex items-center justify-between px-4 py-3">
-            <h1 className="text-lg font-semibold text-white">FlagShip YouTube</h1>
+    <div className="min-h-screen bg-gray-950 text-gray-200 flex flex-col overflow-x-hidden">
+      <header className="border-b border-gray-800 bg-gray-900/80 sticky top-0 z-10">
+        <div className="flex items-center justify-between px-4 py-3">
+          <h1 className="text-lg font-semibold text-white shrink-0">FlagShip YouTube</h1>
+          <div className="flex items-center gap-2">
             <Nav />
+            <HeaderUserMenu />
           </div>
-          {displayMessage && (
-            <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm flex items-center justify-between">
-              <span>{displayMessage}</span>
-              {!isConnectionError && (
-                <button
-                  type="button"
-                  onClick={() => setError(null)}
-                  className="text-red-400 hover:text-red-200"
-                >
-                  Dismiss
-                </button>
-              )}
-            </div>
-          )}
-          {multipleInstances && (
-            <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm">
-              More than one backend is running. Please stop duplicate instances.
-            </div>
-          )}
-        </header>
-        <main className="flex-1 p-4 min-w-0" key={reconnectedAt}>
-          <Routes>
-            <Route path="/watch" element={<Watch setError={setError} />} />
-            <Route path="/" element={<Dashboard setError={setError} />} />
-            <Route path="/channels" element={<Channels setError={setError} />} />
-            <Route path="/videos" element={<Videos setError={setError} />} />
-            <Route path="/queue" element={<Queue setError={setError} />} />
-            <Route path="/log" element={<Log setError={setError} />} />
-            <Route path="/admin/*" element={<Admin setError={setError} />} />
-          </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
+        </div>
+        {displayMessage && (
+          <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm flex items-center justify-between">
+            <span>{displayMessage}</span>
+            {!isConnectionError && (
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="text-red-400 hover:text-red-200"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
+        {multipleInstances && (
+          <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm">
+            More than one backend is running. Please stop duplicate instances.
+          </div>
+        )}
+      </header>
+      <main className="flex-1 p-4 min-w-0" key={`${reconnectedAt}-${currentUser?.user_id ?? 0}`}>
+        <Routes>
+          <Route path="/watch" element={<Watch setError={setError} />} />
+          <Route path="/" element={<Dashboard setError={setError} />} />
+          <Route path="/channels" element={<Channels setError={setError} />} />
+          <Route path="/videos" element={<Videos setError={setError} />} />
+          <Route path="/queue" element={<Queue setError={setError} />} />
+          <Route path="/log" element={<Log setError={setError} />} />
+          <Route path="/admin/*" element={<Admin setError={setError} />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <BrowserRouter>
+        <UserProvider>
+          <AppLayout />
+        </UserProvider>
+      </BrowserRouter>
     </ToastProvider>
   );
 }
