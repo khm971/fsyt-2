@@ -132,6 +132,22 @@ export default function Queue({ setError }) {
         localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
       } catch (_) {}
       setSearchParams({}, { replace: true });
+    } else if (filter === "warnings") {
+      const next = { ...EMPTY_FILTERS, has_warning: true, acknowledged: false };
+      setFilters(next);
+      setPage(1);
+      try {
+        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+      } catch (_) {}
+      setSearchParams({}, { replace: true });
+    } else if (filter === "errors") {
+      const next = { ...EMPTY_FILTERS, has_error: true, acknowledged: false };
+      setFilters(next);
+      setPage(1);
+      try {
+        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+      } catch (_) {}
+      setSearchParams({}, { replace: true });
     }
   }, [searchParams, setSearchParams]);
 

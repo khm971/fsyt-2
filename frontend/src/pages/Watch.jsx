@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../api/client";
 import { cn, formatDurationSeconds } from "../lib/utils";
-import { Play, Film, X, Search } from "lucide-react";
+import { Play, Film, X, Search, MoreVertical, CheckCircle, Circle } from "lucide-react";
 import { DynamicIcon } from "lucide-react/dynamic";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
@@ -31,31 +32,50 @@ export default function Watch({ setError }) {
   const [freeFormSearchInput, setFreeFormSearchInput] = useState("");
   const [freeFormTerms, setFreeFormTerms] = useState([]);
   const [includeUnavailableInSearch, setIncludeUnavailableInSearch] = useState(false);
-  const { videoUpdatedAt } = useQueueWebSocket();
+  const [overflowVideoId, setOverflowVideoId] = useState(null);
+  const [overflowMenuAnchor, setOverflowMenuAnchor] = useState(null);
+  const overflowRef = useRef(null);
+  const overflowMenuRef = useRef(null);
+  const { videoUpdatedAt, videoWatchPatches, clearVideoWatchPatches, addVideoWatchPatch } = useQueueWebSocket();
+
+  useEffect(() => {
+    if (overflowVideoId == null) return;
+    function handleClickOutside(e) {
+      const target = e.target;
+      if (
+        overflowRef.current?.contains(target) ||
+        overflowMenuRef.current?.contains(target)
+      ) return;
+      setOverflowVideoId(null);
+      setOverflowMenuAnchor(null);
+    }
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, [overflowVideoId]);
 
   const loadVideos = useCallback(async () => {
     try {
+      let list;
       if (freeFormTerms.length > 0) {
-        const list = await api.videos.search({
+        list = await api.videos.search({
           q: freeFormTerms.join(","),
           include_unavailable: includeUnavailableInSearch,
         });
-        setVideos(list);
       } else if (selectedTags.length === 0) {
-        const list = await api.videos.watchList();
-        setVideos(list);
+        list = await api.videos.watchList();
       } else {
-        const list = await api.videos.listByTags({
+        list = await api.videos.listByTags({
           tag_ids: selectedTags.map((t) => t.tag_id),
           tag_match: tagMatchMode,
           include_unavailable: includeUnavailableInSearch,
         });
-        setVideos(list);
       }
+      setVideos(list);
+      if (list?.length) clearVideoWatchPatches(list.map((v) => v.video_id));
     } catch (e) {
       setError(e.message);
     }
-  }, [setError, freeFormTerms, includeUnavailableInSearch, selectedTags, tagMatchMode]);
+  }, [setError, freeFormTerms, includeUnavailableInSearch, selectedTags, tagMatchMode, clearVideoWatchPatches]);
 
   const refreshVideoTags = useCallback((videoId) => {
     api.videos
@@ -101,6 +121,30 @@ export default function Watch({ setError }) {
 
   const isFreeFormSearchMode = freeFormTerms.length > 0;
   const isByTagsMode = selectedTags.length >= 1;
+  const isDefaultWatchList = !isFreeFormSearchMode && !isByTagsMode;
+
+  /** Build effective row (video + patch); then for default watch list, only include if still "in progress". */
+  const displayVideos = (() => {
+    const withPatches = videos.map((v) => {
+      const patch = videoWatchPatches[v.video_id];
+      let row =
+        patch && Object.keys(patch).some((k) => patch[k] !== undefined)
+          ? { ...v, ...Object.fromEntries(Object.entries(patch).filter(([, val]) => val !== undefined)) }
+          : v;
+      if (row.watch_is_finished && row.watch_progress_percent === 100 && row.duration != null) {
+        row = { ...row, watch_progress_seconds: row.duration };
+      }
+      return row;
+    });
+    if (!isDefaultWatchList) return withPatches;
+    return withPatches.filter(
+      (row) =>
+        row.watch_is_finished !== true &&
+        ((row.watch_progress_seconds != null && row.watch_progress_seconds > 0) ||
+          (row.watch_progress_percent != null && row.watch_progress_percent > 0))
+    );
+  })();
+
   const subtitle = isFreeFormSearchMode
     ? `Videos where all terms appear in title or description.`
     : isByTagsMode
@@ -291,7 +335,7 @@ export default function Watch({ setError }) {
 
       <p className="text-gray-400 text-sm">{subtitle}</p>
 
-      <p className="text-gray-400 text-sm">{videos.length === 1 ? "1 video found" : `${videos.length} videos found`}</p>
+      <p className="text-gray-400 text-sm">{displayVideos.length === 1 ? "1 video found" : `${displayVideos.length} videos found`}</p>
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-x-hidden">
         <table className="w-full text-left text-sm">
@@ -301,78 +345,171 @@ export default function Watch({ setError }) {
               <th className="px-4 py-3 font-medium">Title</th>
               <th className="px-4 py-3 font-medium w-24">Duration</th>
               <th className="px-4 py-3 font-medium w-24">Watched</th>
-              <th className="px-4 py-3 font-medium w-14">Play</th>
+              <th className="px-4 py-3 font-medium w-28">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {videos.map((v) => (
-              <tr key={v.video_id} className="hover:bg-gray-800/30">
-                <td className="px-4 py-2 font-mono text-gray-300">{v.video_id}</td>
-                <td className="px-4 py-2">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <Tooltip title="Video details" side="top" wrap>
-                      <button
-                        type="button"
-                        onClick={() => setVideoIdForDetails(v.video_id)}
-                        className="text-white hover:text-blue-400 text-left"
-                      >
-                        {v.title || v.provider_key || "—"}
-                      </button>
-                    </Tooltip>
-                    {v.transcode_path && (
-                      <Tooltip title="Transcode Exists">
-                        <span className="inline-flex text-gray-400 shrink-0">
-                          <Film className="w-4 h-4" />
-                        </span>
+            {displayVideos.map((v) => {
+              const row = v;
+              return (
+                <tr key={row.video_id} className="hover:bg-gray-800/30">
+                  <td className="px-4 py-2 font-mono text-gray-300">{row.video_id}</td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Tooltip title="Video details" side="top" wrap>
+                        <button
+                          type="button"
+                          onClick={() => setVideoIdForDetails(row.video_id)}
+                          className="text-white hover:text-blue-400 text-left"
+                        >
+                          {row.title || row.provider_key || "—"}
+                        </button>
                       </Tooltip>
+                      {row.transcode_path && (
+                        <Tooltip title="Transcode Exists">
+                          <span className="inline-flex text-gray-400 shrink-0">
+                            <Film className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
+                      <VideoTagChips
+                        tags={row.tags || []}
+                        onTagClick={(tag) => {
+                          setTagToEdit(tag);
+                          setVideoIdForTagEdit(row.video_id);
+                        }}
+                        onMoreClick={() => setVideoIdForDetails(row.video_id)}
+                      />
+                    </div>
+                  </td>
+                  <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(row.duration)}</td>
+                  <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(row.watch_progress_seconds)}</td>
+                  <td className="px-4 py-2">
+                    {row.status === "available" ? (
+                      <div className="flex items-center gap-0.5">
+                        <Tooltip title={
+                          row.watch_is_finished ? "Play (finished)" :
+                          (row.watch_progress_percent != null && row.watch_progress_percent > 0 && row.watch_progress_percent < 95)
+                            ? `Play (in progress, ${Math.round(row.watch_progress_percent)}%)`
+                            : "Play"
+                        }>
+                          <button
+                            type="button"
+                            onClick={() => setPlayingVideo({ id: row.video_id, title: row.title || row.provider_key, duration: row.duration })}
+                            className={cn(
+                              "p-1.5 rounded",
+                              row.watch_is_finished
+                                ? "text-purple-400 hover:text-purple-300 hover:bg-gray-700"
+                                : (row.watch_progress_percent != null && row.watch_progress_percent > 0 && row.watch_progress_percent < 95)
+                                  ? "text-blue-400 hover:text-blue-300 hover:bg-gray-700"
+                                  : "text-gray-400 hover:text-green-400 hover:bg-gray-700"
+                            )}
+                          >
+                            <Play className="w-4 h-4" />
+                          </button>
+                        </Tooltip>
+                        <div className="relative inline-flex" ref={overflowVideoId === row.video_id ? overflowRef : null}>
+                          <Tooltip title="More actions" side="top">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const next = overflowVideoId === row.video_id ? null : row.video_id;
+                                setOverflowVideoId(next);
+                                setOverflowMenuAnchor(next != null ? e.currentTarget.getBoundingClientRect() : null);
+                              }}
+                              className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+                              aria-expanded={overflowVideoId === row.video_id}
+                              aria-haspopup="true"
+                              aria-label="More actions"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-gray-500">—</span>
                     )}
-                    <VideoTagChips
-                      tags={v.tags || []}
-                      onTagClick={(tag) => {
-                        setTagToEdit(tag);
-                        setVideoIdForTagEdit(v.video_id);
-                      }}
-                      onMoreClick={() => setVideoIdForDetails(v.video_id)}
-                    />
-                  </div>
-                </td>
-                <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(v.duration)}</td>
-                <td className="px-4 py-2 text-gray-300">{formatDurationSeconds(v.watch_progress_seconds)}</td>
-                <td className="px-4 py-2">
-                  {v.status === "available" ? (
-                    <Tooltip title={
-                      v.watch_is_finished ? "Play (finished)" :
-                      (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95)
-                        ? `Play (in progress, ${Math.round(v.watch_progress_percent)}%)`
-                        : "Play"
-                    }>
-                      <button
-                        type="button"
-                        onClick={() => setPlayingVideo({ id: v.video_id, title: v.title || v.provider_key, duration: v.duration })}
-                        className={cn(
-                          "p-1.5 rounded",
-                          v.watch_is_finished
-                            ? "text-purple-400 hover:text-purple-300 hover:bg-gray-700"
-                            : (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95)
-                              ? "text-blue-400 hover:text-blue-300 hover:bg-gray-700"
-                              : "text-gray-400 hover:text-green-400 hover:bg-gray-700"
-                        )}
-                      >
-                        <Play className="w-4 h-4" />
-                      </button>
-                    </Tooltip>
-                  ) : (
-                    <span className="text-gray-500">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-        {videos.length === 0 && (
+        {displayVideos.length === 0 && (
           <div className="px-4 py-8 text-center text-gray-500">{emptyMessage}</div>
         )}
       </div>
+
+      {overflowVideoId != null && overflowMenuAnchor && (() => {
+        const row = displayVideos.find((v) => v.video_id === overflowVideoId);
+        if (!row) return null;
+        const menuHeight = 88;
+        const menuWidth = 192;
+        const gap = 4;
+        const spaceBelow = typeof window !== "undefined" ? window.innerHeight - overflowMenuAnchor.bottom : menuHeight + gap;
+        const openAbove = spaceBelow < menuHeight + gap;
+        const top = openAbove
+          ? overflowMenuAnchor.top - menuHeight - gap
+          : overflowMenuAnchor.bottom + gap;
+        const left = Math.max(8, Math.min(overflowMenuAnchor.right - menuWidth, (typeof window !== "undefined" ? window.innerWidth : 0) - menuWidth - 8));
+        return createPortal(
+          <div
+            ref={overflowMenuRef}
+            className="fixed w-48 rounded-md border border-gray-700 bg-gray-900 py-1 shadow-lg z-[100]"
+            role="menu"
+            style={{ top, left }}
+          >
+            <button
+              type="button"
+              onClick={async () => {
+                setOverflowVideoId(null);
+                setOverflowMenuAnchor(null);
+                try {
+                  await api.videos.updateWatchStatus(row.video_id, true);
+                  addVideoWatchPatch(row.video_id, {
+                    watch_is_finished: true,
+                    watch_progress_percent: 100,
+                  });
+                  toast.addToast("Marked as finished", "success");
+                } catch (e) {
+                  setError(e.message);
+                }
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+              role="menuitem"
+            >
+              <CheckCircle className="h-4 w-4 shrink-0" />
+              Mark as finished
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setOverflowVideoId(null);
+                setOverflowMenuAnchor(null);
+                try {
+                  await api.videos.updateWatchStatus(row.video_id, false);
+                  addVideoWatchPatch(row.video_id, {
+                    watch_is_finished: false,
+                    watch_progress_seconds: 0,
+                    watch_progress_percent: 0,
+                  });
+                  toast.addToast("Marked as not started", "success");
+                } catch (e) {
+                  setError(e.message);
+                }
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-200 hover:bg-gray-800"
+              role="menuitem"
+            >
+              <Circle className="h-4 w-4 shrink-0" />
+              Mark as not started
+            </button>
+          </div>,
+          document.body
+        );
+      })()}
 
       {playingVideo && (
         <VideoPlayer

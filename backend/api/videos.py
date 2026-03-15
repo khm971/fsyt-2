@@ -25,6 +25,11 @@ class WatchProgressUpdate(BaseModel):
     progress_percent: float
 
 
+class WatchStatusUpdate(BaseModel):
+    """Set watch status: is_finished True = mark as finished, False = mark as not started."""
+    is_finished: bool
+
+
 class VideoTagAdd(BaseModel):
     """Either tag_id or title (create tag if missing)."""
     tag_id: int | None = None
@@ -33,7 +38,7 @@ class VideoTagAdd(BaseModel):
 
 from parse_video_id import parse_youtube_video_id
 import db_helpers
-from job_processor import broadcast_queue_update, broadcast_transcode_status_changed
+from job_processor import broadcast_queue_update, broadcast_transcode_status_changed, broadcast_video_updated
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -728,6 +733,62 @@ async def _save_watch_progress(video_id: int, progress_seconds: int, progress_pe
 async def update_watch_progress(request: Request, video_id: int, body: WatchProgressUpdate):
     """Create or update current user's watch progress."""
     await _save_watch_progress(video_id, body.progress_seconds, body.progress_percent, request.state.user_id)
+    return {"ok": True}
+
+
+async def _set_watch_status(video_id: int, is_finished: bool, user_id: int) -> None:
+    """Set user_video is_finished and progress; for not started also zero progress."""
+    if is_finished:
+        await db.execute(
+            """INSERT INTO user_video (user_id, video_id, is_watched, progress_seconds, progress_percent, is_finished, last_watched)
+               VALUES ($1, $2, TRUE, 0, 100, TRUE, NOW())
+               ON CONFLICT (user_id, video_id) DO UPDATE SET
+                 is_watched = TRUE,
+                 progress_percent = 100,
+                 is_finished = TRUE,
+                 last_watched = NOW()""",
+            user_id,
+            video_id,
+        )
+    else:
+        await db.execute(
+            """INSERT INTO user_video (user_id, video_id, is_watched, progress_seconds, progress_percent, is_finished, last_watched)
+               VALUES ($1, $2, FALSE, 0, 0, FALSE, NULL)
+               ON CONFLICT (user_id, video_id) DO UPDATE SET
+                 is_watched = FALSE,
+                 progress_seconds = 0,
+                 progress_percent = 0,
+                 is_finished = FALSE,
+                 last_watched = NULL""",
+            user_id,
+            video_id,
+        )
+
+
+@router.patch("/{video_id}/watch-status")
+async def update_watch_status(request: Request, video_id: int, body: WatchStatusUpdate):
+    """Set current user's watch status: mark as finished or not started."""
+    user_id = request.state.user_id
+    await _set_watch_status(video_id, body.is_finished, user_id)
+    if body.is_finished:
+        await broadcast_video_updated(
+            video_id,
+            watch_is_finished=True,
+            watch_progress_percent=100.0,
+        )
+    else:
+        await broadcast_video_updated(
+            video_id,
+            watch_is_finished=False,
+            watch_progress_seconds=0,
+            watch_progress_percent=0.0,
+        )
+    await log_event(
+        f"Watch status set: video_id={video_id} is_finished={body.is_finished}",
+        SEVERITY_INFO,
+        video_id=video_id,
+        user_id=user_id,
+    )
     return {"ok": True}
 
 

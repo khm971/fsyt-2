@@ -35,6 +35,7 @@ from api.maintenance import router as maintenance_router
 from api.status import router as status_router
 from api.scheduler import router as scheduler_router
 from api.information import router as information_router
+from api.jellyfin import router as jellyfin_router
 from api.users import router as users_router
 from session import SessionMiddleware, get_user_id_from_scope
 from scheduler_service import start_scheduler, shutdown_scheduler
@@ -301,6 +302,7 @@ app.include_router(maintenance_router, prefix="/api")
 app.include_router(status_router, prefix="/api")
 app.include_router(scheduler_router, prefix="/api")
 app.include_router(information_router, prefix="/api")
+app.include_router(jellyfin_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 
 

@@ -561,9 +561,22 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
     return None
 
 
-async def broadcast_video_updated(video_id: int) -> None:
-    """Notify connected clients that a video's status changed so they can refetch."""
-    await ws_manager.broadcast({"type": "video_updated", "video_id": video_id})
+async def broadcast_video_updated(
+    video_id: int,
+    *,
+    watch_is_finished: bool | None = None,
+    watch_progress_seconds: int | None = None,
+    watch_progress_percent: float | None = None,
+) -> None:
+    """Notify connected clients that a video changed. Optional watch_* fields allow patching without refetch."""
+    payload = {"type": "video_updated", "video_id": video_id}
+    if watch_is_finished is not None:
+        payload["watch_is_finished"] = watch_is_finished
+    if watch_progress_seconds is not None:
+        payload["watch_progress_seconds"] = watch_progress_seconds
+    if watch_progress_percent is not None:
+        payload["watch_progress_percent"] = watch_progress_percent
+    await ws_manager.broadcast(payload)
 
 
 async def broadcast_transcode_status_changed() -> None:

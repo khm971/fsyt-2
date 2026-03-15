@@ -35,6 +35,7 @@ export function QueueWebSocketProvider({ children }) {
   const [queueSummary, setQueueSummary] = useState(null);
   const [status, setStatus] = useState("connecting");
   const [videoUpdatedAt, setVideoUpdatedAt] = useState(0);
+  const [videoWatchPatches, setVideoWatchPatches] = useState(() => ({}));
   const [queueUpdatedAt, setQueueUpdatedAt] = useState(0);
   const [logUpdatedAt, setLogUpdatedAt] = useState(0);
   const [transcodeStatusChangedAt, setTranscodeStatusChangedAt] = useState(0);
@@ -113,12 +114,27 @@ export function QueueWebSocketProvider({ children }) {
           setTranscodeProgress(msg.transcodes);
         }
         if (msg.type === "video_updated") {
-          setVideoUpdatedAt(Date.now());
-          setVideoProgressOverrides((prev) => {
-            const next = { ...prev };
-            delete next[msg.video_id];
-            return next;
-          });
+          const hasWatchPatch =
+            msg.watch_is_finished !== undefined ||
+            msg.watch_progress_seconds !== undefined ||
+            msg.watch_progress_percent !== undefined;
+          if (hasWatchPatch) {
+            setVideoWatchPatches((prev) => ({
+              ...prev,
+              [msg.video_id]: {
+                watch_is_finished: msg.watch_is_finished,
+                watch_progress_seconds: msg.watch_progress_seconds,
+                watch_progress_percent: msg.watch_progress_percent,
+              },
+            }));
+          } else {
+            setVideoUpdatedAt(Date.now());
+            setVideoProgressOverrides((prev) => {
+              const next = { ...prev };
+              delete next[msg.video_id];
+              return next;
+            });
+          }
         }
         if (msg.type === "video_progress" && msg.video_id != null) {
           setVideoProgressOverrides((prev) => ({
@@ -174,6 +190,25 @@ export function QueueWebSocketProvider({ children }) {
       .catch(() => {});
   }, []);
 
+  const clearVideoWatchPatches = useCallback((videoIds) => {
+    if (!Array.isArray(videoIds) || videoIds.length === 0) return;
+    setVideoWatchPatches((prev) => {
+      const next = { ...prev };
+      for (const id of videoIds) delete next[id];
+      return next;
+    });
+  }, []);
+
+  const addVideoWatchPatch = useCallback((videoId, patch) => {
+    setVideoWatchPatches((prev) => ({
+      ...prev,
+      [videoId]: {
+        ...prev[videoId],
+        ...patch,
+      },
+    }));
+  }, []);
+
   const refreshSummary = useCallback(() => {
     api.queue
       .summary()
@@ -212,6 +247,9 @@ export function QueueWebSocketProvider({ children }) {
     queueSummary,
     status,
     videoUpdatedAt,
+    videoWatchPatches,
+    clearVideoWatchPatches,
+    addVideoWatchPatch,
     queueUpdatedAt,
     logUpdatedAt,
     transcodeStatusChangedAt,

@@ -1,11 +1,12 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Info, SlidersHorizontal, Wrench, CalendarClock, AlertCircle } from "lucide-react";
+import { Info, SlidersHorizontal, Wrench, CalendarClock, AlertCircle, Server } from "lucide-react";
 import { cn } from "../lib/utils";
 import ControlValuesPanel from "../components/ControlValuesPanel";
 import Information from "./Information";
 import Maintenance from "./Maintenance";
 import JobScheduler from "./JobScheduler";
 import ChargedErrors from "./ChargedErrors";
+import Jellyfin from "./Jellyfin";
 
 function AdminNavLink({ to, icon: Icon, children }) {
   return (
@@ -58,6 +59,9 @@ export default function Admin({ setError }) {
             <AdminNavLink to="/admin/charged-errors" icon={AlertCircle}>
               Charged Errors
             </AdminNavLink>
+            <AdminNavLink to="/admin/jellyfin" icon={Server}>
+              Jellyfin
+            </AdminNavLink>
           </nav>
         </aside>
 
@@ -69,6 +73,7 @@ export default function Admin({ setError }) {
             <Route path="maintenance" element={<Maintenance setError={setError} />} />
             <Route path="control-values" element={<ControlValuesPanel setError={setError} />} />
             <Route path="charged-errors" element={<ChargedErrors setError={setError} />} />
+            <Route path="jellyfin" element={<Jellyfin setError={setError} />} />
           </Routes>
         </section>
       </div>

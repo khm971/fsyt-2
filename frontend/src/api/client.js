@@ -117,6 +117,11 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ progress_seconds: progressSeconds, progress_percent: progressPercent }),
       }),
+    updateWatchStatus: (id, isFinished) =>
+      apiFetch(`/videos/${id}/watch-status`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_finished: isFinished }),
+      }),
     create: (body) =>
       apiFetch("/videos", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/videos/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
@@ -201,6 +206,14 @@ export const api = {
     dismiss: (id) => apiFetch(`/charged_errors/${id}/dismiss`, { method: "POST" }),
     undismiss: (id) => apiFetch(`/charged_errors/${id}/undismiss`, { method: "POST" }),
     dismissAll: () => apiFetch("/charged_errors/dismiss-all", { method: "POST" }),
+  },
+
+  jellyfin: {
+    getStatus: () => apiFetch("/jellyfin/status"),
+    getLibraryItems: (libraryName = "FSYT-2") =>
+      apiFetch(`/jellyfin/library-items?library_name=${encodeURIComponent(libraryName)}`),
+    getItemWatchStatus: (itemId) =>
+      apiFetch(`/jellyfin/library-items/${encodeURIComponent(itemId)}/watch-status`),
   },
 
   log: {

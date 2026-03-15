@@ -221,7 +221,7 @@ export default function Dashboard({ setError }) {
               <div className="flex items-center gap-2 flex-wrap">
                 {errorsCount > 0 && (
                   <Link
-                    to="/queue?filter=warnings_and_errors"
+                    to="/queue?filter=errors"
                     className="flex items-center gap-1.5 text-red-400 hover:text-red-300"
                   >
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
@@ -230,7 +230,7 @@ export default function Dashboard({ setError }) {
                 )}
                 {warningsCount > 0 && (
                   <Link
-                    to="/queue?filter=warnings_and_errors"
+                    to="/queue?filter=warnings"
                     className="flex items-center gap-1.5 text-yellow-400 hover:text-yellow-300"
                   >
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
