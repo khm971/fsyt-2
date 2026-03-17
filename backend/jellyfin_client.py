@@ -219,9 +219,9 @@ def get_jellyfin_library_items(library_name="FSYT-2"):
 
 
 def get_jellyfin_item_watch_status(jellyfin_item_id, jellyfin_username="khm"):
-    """Fetch watch status for one Jellyfin item for the given Jellyfin user. Returns { started, progress_seconds, progress_percent, is_finished } or { error: "<message>" }. Never raises."""
+    """Fetch watch status for one Jellyfin item for the given Jellyfin user. Returns { started, progress_seconds, progress_percent, play_count } or { error: "<message>" }. Never raises."""
     base, api_key = _get_config()
-    result = {"started": False, "progress_seconds": 0, "progress_percent": 0.0, "is_finished": False}
+    result = {"started": False, "progress_seconds": 0, "progress_percent": 0.0, "play_count": 0}
     headers = _headers(api_key)
 
     def get_json(path, timeout=15):
@@ -253,17 +253,15 @@ def get_jellyfin_item_watch_status(jellyfin_item_id, jellyfin_username="khm"):
         if not isinstance(ud, dict):
             return result
         pos_ticks = ud.get("PlaybackPositionTicks") or 0
-        play_count = ud.get("PlayCount") or 0
-        played = ud.get("Played") or False
+        play_count = int(ud.get("PlayCount") or 0)
         runtime_ticks = it.get("RunTimeTicks") or it.get("CumulativeRunTimeTicks") or 0
         progress_seconds = int(pos_ticks) // 10_000_000
         progress_percent = (100.0 * int(pos_ticks) / int(runtime_ticks)) if runtime_ticks else 0.0
         started = pos_ticks > 0 or play_count > 0
-        is_finished = played or play_count > 0
         result["started"] = bool(started)
         result["progress_seconds"] = progress_seconds
         result["progress_percent"] = round(progress_percent, 1)
-        result["is_finished"] = bool(is_finished)
+        result["play_count"] = play_count
         return result
     except requests.RequestException as e:
         return {"error": _error_message(e)}

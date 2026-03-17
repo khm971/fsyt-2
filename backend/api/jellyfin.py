@@ -37,7 +37,7 @@ async def jellyfin_status(request: Request):
 
 @router.get("/library-items/{item_id}/watch-status")
 async def jellyfin_item_watch_status(request: Request, item_id: str):
-    """Return Jellyfin watch status for a single item. Returns 200 with { started, progress_seconds, progress_percent, is_finished } or { error: "<message>" }."""
+    """Return Jellyfin watch status for a single item. Returns 200 with { started, progress_seconds, progress_percent, play_count } or { error: "<message>" }."""
     data = await asyncio.to_thread(get_jellyfin_item_watch_status, item_id)
     return data
 

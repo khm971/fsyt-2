@@ -12,6 +12,7 @@ import {
 import { api } from "../api/client";
 import { useToast } from "../context/ToastContext";
 import { cn } from "../lib/utils";
+import { Tooltip } from "../components/Tooltip";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
 
 function SectionTitle({ icon: Icon, children }) {
@@ -32,6 +33,8 @@ export default function Jellyfin({ setError }) {
   const [libraryItemsError, setLibraryItemsError] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
   const [jellyfinWatchByItemId, setJellyfinWatchByItemId] = useState(() => ({}));
+  const [getAllRunning, setGetAllRunning] = useState(false);
+  const [getAllProgress, setGetAllProgress] = useState({ current: 0, total: 0 });
 
   const load = useCallback(() => {
     setLoading(true);
@@ -49,6 +52,7 @@ export default function Jellyfin({ setError }) {
   const loadLibraryItems = useCallback(() => {
     setLibraryItemsLoading(true);
     setLibraryItemsError(null);
+    setJellyfinWatchByItemId({});
     api.jellyfin
       .getLibraryItems("FSYT-2")
       .then((res) => {
@@ -62,6 +66,79 @@ export default function Jellyfin({ setError }) {
       })
       .finally(() => setLibraryItemsLoading(false));
   }, [setError]);
+
+  const fetchJellyfinWatchStatus = useCallback((itemId, e) => {
+    if (e) e.stopPropagation();
+    if (itemId == null) return;
+    setJellyfinWatchByItemId((prev) => ({ ...prev, [itemId]: { loading: true } }));
+    api.jellyfin
+      .getItemWatchStatus(itemId)
+      .then((res) => {
+        if (res?.error) {
+          setJellyfinWatchByItemId((p) => ({ ...p, [itemId]: { loading: false, error: res.error } }));
+        } else {
+          setJellyfinWatchByItemId((p) => ({
+            ...p,
+            [itemId]: {
+              loading: false,
+              started: res.started,
+              progress_seconds: res.progress_seconds,
+              progress_percent: res.progress_percent,
+              play_count: res.play_count,
+            },
+          }));
+        }
+      })
+      .catch((e) => {
+        setJellyfinWatchByItemId((p) => ({ ...p, [itemId]: { loading: false, error: e?.message || "Failed to load" } }));
+      });
+  }, []);
+
+  const runGetAllWatchStatuses = useCallback(() => {
+    if (libraryItems == null || libraryItems.length === 0) return;
+    const episodes = libraryItems.filter((i) => i.type === "Episode" && i.id != null);
+    if (episodes.length === 0) return;
+    setGetAllRunning(true);
+    setGetAllProgress({ current: 0, total: episodes.length });
+    let index = 0;
+    const runNext = () => {
+      if (index >= episodes.length) {
+        setGetAllRunning(false);
+        setGetAllProgress({ current: 0, total: 0 });
+        return;
+      }
+      const item = episodes[index];
+      const id = item.id;
+      setGetAllProgress((p) => ({ ...p, current: index + 1 }));
+      setJellyfinWatchByItemId((prev) => ({ ...prev, [id]: { loading: true } }));
+      api.jellyfin
+        .getItemWatchStatus(id)
+        .then((res) => {
+          if (res?.error) {
+            setJellyfinWatchByItemId((p) => ({ ...p, [id]: { loading: false, error: res.error } }));
+          } else {
+            setJellyfinWatchByItemId((p) => ({
+              ...p,
+              [id]: {
+                loading: false,
+                started: res.started,
+                progress_seconds: res.progress_seconds,
+                progress_percent: res.progress_percent,
+                play_count: res.play_count,
+              },
+            }));
+          }
+        })
+        .catch((e) => {
+          setJellyfinWatchByItemId((p) => ({ ...p, [id]: { loading: false, error: e?.message || "Failed to load" } }));
+        })
+        .finally(() => {
+          index += 1;
+          runNext();
+        });
+    };
+    runNext();
+  }, [libraryItems]);
 
   if (loading) {
     return (
@@ -213,17 +290,39 @@ export default function Jellyfin({ setError }) {
       <div>
         <SectionTitle icon={Film}>FSYT-2 Library Videos</SectionTitle>
         <div className="space-y-3">
-          <button
-            type="button"
-            onClick={loadLibraryItems}
-            disabled={libraryItemsLoading}
-            className="inline-flex items-center gap-2 rounded-lg bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <Film className="h-4 w-4" />
-            Load FSYT-2 Library Videos
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={loadLibraryItems}
+              disabled={libraryItemsLoading}
+              className="inline-flex items-center gap-2 rounded-lg bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <Film className="h-4 w-4" />
+              Load FSYT-2 Library Videos
+            </button>
+            <button
+              type="button"
+              onClick={runGetAllWatchStatuses}
+              disabled={
+                libraryItems == null ||
+                libraryItems.length === 0 ||
+                libraryItemsLoading ||
+                getAllRunning ||
+                libraryItems.filter((i) => i.type === "Episode" && i.id != null).length === 0
+              }
+              className="inline-flex items-center gap-2 rounded-lg bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <RefreshCw className={cn("h-4 w-4", getAllRunning && "animate-spin")} />
+              Get All Watch Statuses
+            </button>
+          </div>
           {libraryItemsLoading && (
             <p className="text-sm text-gray-400">Loading…</p>
+          )}
+          {getAllRunning && getAllProgress.total > 0 && (
+            <p className="text-sm text-gray-400">
+              Fetching Jellyfin watch status: {getAllProgress.current} of {getAllProgress.total} episodes…
+            </p>
           )}
           {libraryItemsError && !libraryItemsLoading && (
             <div className="rounded-lg border border-amber-900/50 bg-amber-900/20 p-4">
@@ -243,8 +342,16 @@ export default function Jellyfin({ setError }) {
                     const isEpisode = item.type === "Episode";
                     const hasMatch = isEpisode && item.video_id != null;
                     const noMatch = isEpisode && item.video_id == null;
+                    const jellyfinFetched =
+                      isEpisode &&
+                      item.id != null &&
+                      jellyfinWatchByItemId[item.id] != null &&
+                      !jellyfinWatchByItemId[item.id].loading &&
+                      jellyfinWatchByItemId[item.id].error == null;
                     const rowBg = hasMatch
-                      ? "bg-emerald-900/30 border-emerald-800/50"
+                      ? jellyfinFetched
+                        ? "bg-emerald-700/40 border-emerald-600/50"
+                        : "bg-emerald-900/30 border-emerald-800/50"
                       : noMatch
                         ? "bg-amber-900/30 border-amber-800/50"
                         : "bg-gray-800/50 border-gray-800";
@@ -252,33 +359,6 @@ export default function Jellyfin({ setError }) {
                     const handleRowActivate = () => {
                       if (!hasMatch) return;
                       setVideoIdForDetails(item.video_id);
-                      const id = item.id;
-                      if (id == null) return;
-                      const cur = jellyfinWatchByItemId[id];
-                      if (cur != null && cur.loading === false) return;
-                      if (cur?.loading) return;
-                      setJellyfinWatchByItemId((prev) => ({ ...prev, [id]: { loading: true } }));
-                      api.jellyfin
-                        .getItemWatchStatus(id)
-                        .then((res) => {
-                          if (res?.error) {
-                            setJellyfinWatchByItemId((p) => ({ ...p, [id]: { loading: false, error: res.error } }));
-                          } else {
-                            setJellyfinWatchByItemId((p) => ({
-                              ...p,
-                              [id]: {
-                                loading: false,
-                                started: res.started,
-                                progress_seconds: res.progress_seconds,
-                                progress_percent: res.progress_percent,
-                                is_finished: res.is_finished,
-                              },
-                            }));
-                          }
-                        })
-                        .catch((e) => {
-                          setJellyfinWatchByItemId((p) => ({ ...p, [id]: { loading: false, error: e?.message || "Failed to load" } }));
-                        });
                     };
                     return (
                       <li
@@ -309,6 +389,19 @@ export default function Jellyfin({ setError }) {
                           )}
                           {item.series_name != null && item.series_name !== "" && (
                             <span className="text-xs text-gray-400">({item.series_name})</span>
+                          )}
+                          {isEpisode && item.id != null && (
+                            <Tooltip title="Get Jellyfin watch status">
+                              <button
+                                type="button"
+                                onClick={(e) => fetchJellyfinWatchStatus(item.id, e)}
+                                disabled={jellyfinWatchByItemId[item.id]?.loading}
+                                className="ml-1 rounded p-0.5 text-gray-400 hover:bg-gray-700 hover:text-gray-200 disabled:opacity-50 disabled:pointer-events-none"
+                                aria-label="Get Jellyfin watch status"
+                              >
+                                <RefreshCw className={cn("h-4 w-4", jellyfinWatchByItemId[item.id]?.loading && "animate-spin")} />
+                              </button>
+                            </Tooltip>
                           )}
                         </div>
                         <div className="flex flex-wrap gap-x-4 gap-y-0 text-sm text-gray-400">
@@ -341,10 +434,14 @@ export default function Jellyfin({ setError }) {
                             Finished: {item.watch_status.is_finished ? "yes" : "no"}
                           </div>
                         )}
-                        {isEpisode && hasMatch && jellyfinWatchByItemId[item.id] != null && (
+                        {isEpisode && (getAllRunning && jellyfinWatchByItemId[item.id] == null ? (
+                          <div className="text-sm text-gray-400">
+                            Jellyfin Watch Status: Waiting…
+                          </div>
+                        ) : jellyfinWatchByItemId[item.id] != null ? (
                           <div className="text-sm text-gray-400">
                             {jellyfinWatchByItemId[item.id].loading ? (
-                              <>Jellyfin Watch Status: Loading…</>
+                              <>Jellyfin Watch Status: Loading…{getAllRunning && getAllProgress.total > 0 ? ` (${getAllProgress.current} of ${getAllProgress.total})` : ""}</>
                             ) : jellyfinWatchByItemId[item.id].error != null ? (
                               <>Jellyfin Watch Status: {jellyfinWatchByItemId[item.id].error}</>
                             ) : (
@@ -358,11 +455,11 @@ export default function Jellyfin({ setError }) {
                                   ? `, ${Number(jellyfinWatchByItemId[item.id].progress_percent).toFixed(1)}%`
                                   : ""}
                                 {", "}
-                                Finished: {jellyfinWatchByItemId[item.id].is_finished ? "yes" : "no"}
+                                Play count: {jellyfinWatchByItemId[item.id].play_count ?? 0}
                               </>
                             )}
                           </div>
-                        )}
+                        ) : null)}
                         {isEpisode && !hasMatch && item.path != null && item.path !== "" && (
                           <div className="text-xs text-gray-500 truncate max-w-full" title={item.path}>
                             Jellyfin path: {item.path}
