@@ -1077,12 +1077,3 @@ async def update_video(request: Request, video_id: int, body: VideoUpdate):
             user_id=user_id,
         )
     return row_to_video(dict(r, status_percent_complete=None))
-
-
-@router.delete("/{video_id}", status_code=204)
-async def delete_video(request: Request, video_id: int):
-    r = await db.fetchrow("SELECT provider_key, channel_id FROM video WHERE video_id = $1", video_id)
-    await db.execute("DELETE FROM video WHERE video_id = $1", video_id)
-    if r:
-        user_id = getattr(request.state, "user_id", None)
-        await log_event(f"Video deleted: {r['provider_key']} (video_id={video_id})", SEVERITY_INFO, video_id=video_id, channel_id=r.get("channel_id"), user_id=user_id)

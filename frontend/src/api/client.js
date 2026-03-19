@@ -125,7 +125,6 @@ export const api = {
     create: (body) =>
       apiFetch("/videos", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/videos/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
-    delete: (id) => apiFetch(`/videos/${id}`, { method: "DELETE" }),
   },
 
   queue: {

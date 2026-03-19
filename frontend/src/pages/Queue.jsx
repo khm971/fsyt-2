@@ -95,6 +95,30 @@ function filtersFromDashboardFilterParam(searchParams) {
   return null;
 }
 
+/** Remove error/warning/ack filters so bulk-ack can apply its own on top of channel, dates, status, etc. */
+function stripAckListFlagParams(params) {
+  const p = { ...params };
+  delete p.error_flag;
+  delete p.warning_flag;
+  delete p.acknowledge_flag;
+  return p;
+}
+
+/** Paginate through queue list API (max 500 per request) and collect job_queue_id. */
+async function fetchAllJobQueueIdsForParams(listParams) {
+  const limit = 500;
+  const ids = [];
+  let offset = 0;
+  while (true) {
+    const res = await api.queue.list({ ...listParams, limit, offset });
+    const items = res.items || [];
+    for (const j of items) ids.push(j.job_queue_id);
+    if (items.length < limit) break;
+    offset += limit;
+  }
+  return ids;
+}
+
 export default function Queue({ setError }) {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -120,6 +144,7 @@ export default function Queue({ setError }) {
   const [page, setPage] = useState(1);
   const [pageJobs, setPageJobs] = useState([]);
   const [pageLoading, setPageLoading] = useState(false);
+  const [listNonce, setListNonce] = useState(0);
   const [channels, setChannels] = useState([]);
 
   const filterParams = useMemo(() => filtersToParams(filters), [filters]);
@@ -211,7 +236,7 @@ export default function Queue({ setError }) {
         if (!ac.signal.aborted) setPageLoading(false);
       });
     return () => ac.abort();
-  }, [page, sortBy, sortOrder, filterParams, setError]);
+  }, [page, sortBy, sortOrder, filterParams, listNonce, setError]);
 
   useEffect(() => {
     if (effectiveTotal > 0 && page > totalPages) setPage(totalPages);
@@ -280,23 +305,61 @@ export default function Queue({ setError }) {
   };
 
   const acknowledgeAll = async (mode) => {
-    const unack = jobs.filter((j) => !j.acknowledge_flag && (j.error_flag || j.warning_flag));
-    let ids = [];
-    if (mode === "warnings") {
-      ids = unack.filter((j) => j.warning_flag).map((j) => j.job_queue_id);
-    } else if (mode === "errors") {
-      ids = unack.filter((j) => j.error_flag).map((j) => j.job_queue_id);
-    } else {
-      ids = unack.map((j) => j.job_queue_id);
-    }
     setShowAckAllModal(false);
+    const base = stripAckListFlagParams(filterParams);
+    const sortParams = { sort_by: sortBy, sort_order: sortOrder };
+    let ids = [];
+    try {
+      if (mode === "warnings") {
+        ids = await fetchAllJobQueueIdsForParams({
+          ...sortParams,
+          ...base,
+          acknowledge_flag: false,
+          warning_flag: true,
+        });
+      } else if (mode === "errors") {
+        ids = await fetchAllJobQueueIdsForParams({
+          ...sortParams,
+          ...base,
+          acknowledge_flag: false,
+          error_flag: true,
+        });
+      } else {
+        const idSet = new Set();
+        const w = await fetchAllJobQueueIdsForParams({
+          ...sortParams,
+          ...base,
+          acknowledge_flag: false,
+          warning_flag: true,
+        });
+        const e = await fetchAllJobQueueIdsForParams({
+          ...sortParams,
+          ...base,
+          acknowledge_flag: false,
+          error_flag: true,
+        });
+        w.forEach((id) => idSet.add(id));
+        e.forEach((id) => idSet.add(id));
+        ids = [...idSet];
+      }
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+      return;
+    }
     if (ids.length === 0) {
       toast.addToast("No jobs to acknowledge", "info");
       return;
     }
+    const CHUNK = 40;
     try {
-      await Promise.all(ids.map((id) => api.queue.acknowledge(id)));
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        await Promise.all(slice.map((id) => api.queue.acknowledge(id)));
+      }
       toast.addToast(`Acknowledged ${ids.length} job${ids.length === 1 ? "" : "s"}`, "success");
+      setListNonce((n) => n + 1);
+      refreshQueue?.();
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");

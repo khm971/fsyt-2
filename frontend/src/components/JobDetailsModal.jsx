@@ -5,6 +5,7 @@ import {
   Plus, Download, FileSearch, Film, ListTodo, Settings, Play, Clock, CheckCircle,
   XCircle, AlertCircle, AlertTriangle, HelpCircle, CalendarClock, MessageCircle,
   Hash, Users, User, Calendar, RefreshCw, Activity, ArrowUp, FileText, Braces, ClipboardList,
+  Check, Undo2,
 } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 import Modal from "./Modal";
@@ -52,6 +53,7 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
   const [schedulerEntryName, setSchedulerEntryName] = useState(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [cancelJobLoading, setCancelJobLoading] = useState(false);
+  const [acknowledgeLoading, setAcknowledgeLoading] = useState(false);
 
   useEffect(() => {
     if (jobId == null) {
@@ -81,8 +83,17 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
   }, [jobId, setError]);
 
   const refreshJobDetails = useCallback(() => {
-    if (jobId == null) return;
-    api.queue.get(jobId).then(setJobDetails).catch((e) => setError(e.message));
+    if (jobId == null) return Promise.resolve();
+    return api.queue
+      .get(jobId)
+      .then((j) => {
+        setJobDetails(j);
+        return j;
+      })
+      .catch((e) => {
+        setError(e.message);
+        throw e;
+      });
   }, [jobId, setError]);
 
   const runJobNow = async () => {
@@ -128,6 +139,26 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
     } finally {
       setCancelJobLoading(false);
       setShowCancelConfirm(false);
+    }
+  };
+
+  const toggleAcknowledge = async () => {
+    if (jobDetails == null || acknowledgeLoading) return;
+    setAcknowledgeLoading(true);
+    try {
+      const id = jobDetails.job_queue_id;
+      if (jobDetails.acknowledge_flag) {
+        await api.queue.unacknowledge(id);
+        toast.addToast(`Job ${id} unacknowledged`, "success");
+      } else {
+        await api.queue.acknowledge(id);
+        toast.addToast(`Job ${id} acknowledged`, "success");
+      }
+      await refreshJobDetails();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAcknowledgeLoading(false);
     }
   };
 
@@ -295,7 +326,38 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
                       Acknowledged
                     </span>
                   </td>
-                  <td className="py-1.5 text-white">{jobDetails.acknowledge_flag ? "Yes" : "No"}</td>
+                  <td className="py-1.5 text-white">
+                    <span className="inline-flex items-center gap-2 flex-wrap">
+                      {jobDetails.acknowledge_flag ? "Yes" : "No"}
+                      <Tooltip title={jobDetails.acknowledge_flag ? "Mark as not acknowledged" : "Mark as acknowledged"} side="top" wrap>
+                        <button
+                          type="button"
+                          onClick={toggleAcknowledge}
+                          disabled={acknowledgeLoading}
+                          className={cn(
+                            "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border transition-colors disabled:opacity-50",
+                            jobDetails.acknowledge_flag
+                              ? "border-green-800 text-green-400 hover:bg-green-950/40"
+                              : "border-gray-600 text-gray-200 hover:bg-gray-800"
+                          )}
+                        >
+                          {acknowledgeLoading ? (
+                            "…"
+                          ) : jobDetails.acknowledge_flag ? (
+                            <>
+                              <Undo2 className="w-3.5 h-3.5 shrink-0" />
+                              Unacknowledge
+                            </>
+                          ) : (
+                            <>
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                              Acknowledge
+                            </>
+                          )}
+                        </button>
+                      </Tooltip>
+                    </span>
+                  </td>
                 </tr>
                 {jobDetails.scheduler_entry_id != null && (
                   <tr>
@@ -403,15 +465,36 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
               </div>
             )}
             <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-gray-700">
-              {jobDetails.status === "new" && (
-                <button
-                  type="button"
-                  onClick={() => setShowCancelConfirm(true)}
-                  className="p-2 text-red-400 hover:text-red-300 hover:bg-gray-700 rounded"
+              <Tooltip
+                title={
+                  jobDetails.status === "new"
+                    ? "Cancel this queued job"
+                    : "Only jobs with status New can be cancelled"
+                }
+                side="top"
+                wrap
+              >
+                <span
+                  className={cn(
+                    "inline-flex rounded",
+                    jobDetails.status !== "new" && "cursor-not-allowed"
+                  )}
                 >
-                  Cancel job
-                </button>
-              )}
+                  <button
+                    type="button"
+                    disabled={jobDetails.status !== "new"}
+                    onClick={() => setShowCancelConfirm(true)}
+                    className={cn(
+                      "p-2 rounded transition-colors",
+                      jobDetails.status === "new"
+                        ? "text-red-400 hover:text-red-300 hover:bg-gray-700"
+                        : "text-gray-500 opacity-50 pointer-events-none"
+                    )}
+                  >
+                    Cancel job
+                  </button>
+                </span>
+              </Tooltip>
               <button type="button" onClick={onClose} className="btn-secondary">
                 Close
               </button>
