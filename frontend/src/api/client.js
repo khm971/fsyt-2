@@ -131,28 +131,29 @@ export const api = {
   queue: {
     summary: () => apiFetch("/queue/summary"),
     list: (params = {}) => {
+      const { signal, ...queryParams } = params;
       const q = new URLSearchParams();
-      if (params.status) q.set("status", params.status);
-      if (params.job_type) q.set("job_type", params.job_type);
-      if (params.scheduler_entry_id != null) q.set("scheduler_entry_id", params.scheduler_entry_id);
-      if (params.video_id != null && params.video_id !== "") q.set("video_id", params.video_id);
-      if (params.channel_id != null && params.channel_id !== "") q.set("channel_id", params.channel_id);
-      if (params.scheduled_future !== undefined && params.scheduled_future !== null) q.set("scheduled_future", String(params.scheduled_future));
-      if (params.error_flag !== undefined && params.error_flag !== null) q.set("error_flag", String(params.error_flag));
-      if (params.warning_flag !== undefined && params.warning_flag !== null) q.set("warning_flag", String(params.warning_flag));
-      if (params.acknowledge_flag !== undefined && params.acknowledge_flag !== null) q.set("acknowledge_flag", String(params.acknowledge_flag));
-      if (params.record_created_from) q.set("record_created_from", params.record_created_from);
-      if (params.record_created_to) q.set("record_created_to", params.record_created_to);
-      if (params.last_update_from) q.set("last_update_from", params.last_update_from);
-      if (params.last_update_to) q.set("last_update_to", params.last_update_to);
-      if (params.run_after_from) q.set("run_after_from", params.run_after_from);
-      if (params.run_after_to) q.set("run_after_to", params.run_after_to);
-      if (params.limit != null) q.set("limit", params.limit);
-      if (params.offset != null) q.set("offset", params.offset);
-      if (params.sort_by != null) q.set("sort_by", params.sort_by);
-      if (params.sort_order != null) q.set("sort_order", params.sort_order);
+      if (queryParams.status) q.set("status", queryParams.status);
+      if (queryParams.job_type) q.set("job_type", queryParams.job_type);
+      if (queryParams.scheduler_entry_id != null) q.set("scheduler_entry_id", queryParams.scheduler_entry_id);
+      if (queryParams.video_id != null && queryParams.video_id !== "") q.set("video_id", queryParams.video_id);
+      if (queryParams.channel_id != null && queryParams.channel_id !== "") q.set("channel_id", queryParams.channel_id);
+      if (queryParams.scheduled_future !== undefined && queryParams.scheduled_future !== null) q.set("scheduled_future", String(queryParams.scheduled_future));
+      if (queryParams.error_flag !== undefined && queryParams.error_flag !== null) q.set("error_flag", String(queryParams.error_flag));
+      if (queryParams.warning_flag !== undefined && queryParams.warning_flag !== null) q.set("warning_flag", String(queryParams.warning_flag));
+      if (queryParams.acknowledge_flag !== undefined && queryParams.acknowledge_flag !== null) q.set("acknowledge_flag", String(queryParams.acknowledge_flag));
+      if (queryParams.record_created_from) q.set("record_created_from", queryParams.record_created_from);
+      if (queryParams.record_created_to) q.set("record_created_to", queryParams.record_created_to);
+      if (queryParams.last_update_from) q.set("last_update_from", queryParams.last_update_from);
+      if (queryParams.last_update_to) q.set("last_update_to", queryParams.last_update_to);
+      if (queryParams.run_after_from) q.set("run_after_from", queryParams.run_after_from);
+      if (queryParams.run_after_to) q.set("run_after_to", queryParams.run_after_to);
+      if (queryParams.limit != null) q.set("limit", queryParams.limit);
+      if (queryParams.offset != null) q.set("offset", queryParams.offset);
+      if (queryParams.sort_by != null) q.set("sort_by", queryParams.sort_by);
+      if (queryParams.sort_order != null) q.set("sort_order", queryParams.sort_order);
       const query = q.toString();
-      return apiFetch(`/queue${query ? `?${query}` : ""}`);
+      return apiFetch(`/queue${query ? `?${query}` : ""}`, { signal });
     },
     filterOptions: () => apiFetch("/queue/filter-options"),
     get: (id) => apiFetch(`/queue/${id}`),

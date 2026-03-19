@@ -85,6 +85,16 @@ function loadStoredFilters() {
   return { ...EMPTY_FILTERS };
 }
 
+/** Dashboard links use ?filter=…; apply on first paint so the list request matches the banner (avoids effect-order race). */
+function filtersFromDashboardFilterParam(searchParams) {
+  const filter = searchParams.get("filter");
+  if (filter === "scheduled") return { ...EMPTY_FILTERS, scheduled_future: true };
+  if (filter === "queued") return { ...EMPTY_FILTERS, scheduled_future: false, status: "new" };
+  if (filter === "warnings") return { ...EMPTY_FILTERS, has_warning: true, acknowledged: false };
+  if (filter === "errors") return { ...EMPTY_FILTERS, has_error: true, acknowledged: false };
+  return null;
+}
+
 export default function Queue({ setError }) {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -100,7 +110,10 @@ export default function Queue({ setError }) {
   const [showAckAllModal, setShowAckAllModal] = useState(false);
   const [showColumnFilterModal, setShowColumnFilterModal] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadStoredColumns);
-  const [filters, setFilters] = useState(loadStoredFilters);
+  const [filters, setFilters] = useState(() => {
+    const fromUrl = filtersFromDashboardFilterParam(searchParams);
+    return fromUrl != null ? fromUrl : loadStoredFilters();
+  });
   const [listTotal, setListTotal] = useState(0);
   const [sortBy, setSortBy] = useState("id");
   const [sortOrder, setSortOrder] = useState("desc");
@@ -115,40 +128,18 @@ export default function Queue({ setError }) {
   const totalPages = Math.max(1, Math.ceil(effectiveTotal / PAGE_SIZE));
 
   useEffect(() => {
-    const filter = searchParams.get("filter");
-    if (filter === "scheduled") {
-      const next = { ...EMPTY_FILTERS, scheduled_future: true };
-      setFilters(next);
-      setPage(1);
-      try {
-        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
-      } catch (_) {}
-      setSearchParams({}, { replace: true });
-    } else if (filter === "queued") {
-      const next = { ...EMPTY_FILTERS, scheduled_future: false, status: "new" };
-      setFilters(next);
-      setPage(1);
-      try {
-        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
-      } catch (_) {}
-      setSearchParams({}, { replace: true });
-    } else if (filter === "warnings") {
-      const next = { ...EMPTY_FILTERS, has_warning: true, acknowledged: false };
-      setFilters(next);
-      setPage(1);
-      try {
-        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
-      } catch (_) {}
-      setSearchParams({}, { replace: true });
-    } else if (filter === "errors") {
-      const next = { ...EMPTY_FILTERS, has_error: true, acknowledged: false };
-      setFilters(next);
-      setPage(1);
-      try {
-        localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
-      } catch (_) {}
-      setSearchParams({}, { replace: true });
-    }
+    const next = filtersFromDashboardFilterParam(searchParams);
+    if (!next) return;
+    setFilters((prev) => {
+      const sameApiParams =
+        JSON.stringify(filtersToParams(prev)) === JSON.stringify(filtersToParams(next));
+      return sameApiParams ? prev : next;
+    });
+    setPage(1);
+    try {
+      localStorage.setItem(QUEUE_FILTERS_KEY, JSON.stringify(next));
+    } catch (_) {}
+    setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
 
   const sortableColumns = ["id", "priority", "job_type", "video_id", "status", "record_created", "last_update"];
@@ -197,6 +188,7 @@ export default function Queue({ setError }) {
   }, [showAdd]);
 
   useEffect(() => {
+    const ac = new AbortController();
     setPageLoading(true);
     api.queue
       .list({
@@ -205,14 +197,21 @@ export default function Queue({ setError }) {
         sort_by: sortBy,
         sort_order: sortOrder,
         ...filterParams,
+        signal: ac.signal,
       })
       .then((res) => {
         setPageJobs(res.items || []);
         if (Object.keys(filterParams).length > 0) setListTotal(res.total ?? 0);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setPageLoading(false));
-  }, [page, sortBy, sortOrder, filterParams]);
+      .catch((e) => {
+        if (e?.name === "AbortError") return;
+        setError(e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setPageLoading(false);
+      });
+    return () => ac.abort();
+  }, [page, sortBy, sortOrder, filterParams, setError]);
 
   useEffect(() => {
     if (effectiveTotal > 0 && page > totalPages) setPage(totalPages);
