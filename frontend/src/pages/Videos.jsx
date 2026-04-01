@@ -82,6 +82,7 @@ import { VideoDetailsModal } from "../components/VideoDetailsModal";
 import { VideoTagChips } from "../components/VideoTagChips";
 import { TagEditModal } from "../components/TagEditModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
+import { AddVideoModal } from "../components/AddVideoModal";
 
 export default function Videos({ setError }) {
   const toast = useToast();
@@ -96,7 +97,6 @@ export default function Videos({ setError }) {
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [totalVideos, setTotalVideos] = useState(0);
-  const [addForm, setAddForm] = useState({ provider_key: "", queue_download: true });
   const [playingVideo, setPlayingVideo] = useState(null);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
@@ -160,26 +160,7 @@ export default function Videos({ setError }) {
     if (videoUpdatedAt > 0) loadVideos();
   }, [videoUpdatedAt, loadVideos]);
 
-  const openAdd = () => {
-    setAddForm({ provider_key: "", queue_download: true, tag_needs_review: true });
-    setShowAdd(true);
-  };
-
-  const saveAdd = async () => {
-    try {
-      const v = await api.videos.create({
-        provider_key: addForm.provider_key,
-        queue_download: addForm.queue_download,
-        tag_needs_review: addForm.tag_needs_review !== false,
-      });
-      setShowAdd(false);
-      loadVideos();
-      toast.addToast(`Video added (ID ${v.video_id})${addForm.queue_download ? ", download queued" : ""}`, "success");
-    } catch (e) {
-      setError(e.message);
-      toast.addToast(e.message, "error");
-    }
-  };
+  const openAdd = () => setShowAdd(true);
 
   const queueVideoJob = async (videoId, jobType) => {
     try {
@@ -454,54 +435,12 @@ export default function Videos({ setError }) {
           }}
         />
       )}
-      {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowAdd(false)}>
-          <div
-            className="bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-w-md w-full mx-4 p-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-medium text-white mb-4">Add video</h3>
-            <div className="space-y-3 text-sm">
-              <label className="block">
-                <span className="text-gray-400 block mb-1">YouTube video ID or full URL</span>
-                <input
-                  type="text"
-                  value={addForm.provider_key}
-                  onChange={(e) => setAddForm({ ...addForm, provider_key: e.target.value })}
-                  className="input"
-                  placeholder="https://www.youtube.com/watch?v=... or video ID"
-                />
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={addForm.queue_download}
-                  onChange={(e) => setAddForm({ ...addForm, queue_download: e.target.checked })}
-                  className="rounded border-gray-600 bg-gray-800"
-                />
-                <span className="text-gray-400">Queue download</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={addForm.tag_needs_review !== false}
-                  onChange={(e) => setAddForm({ ...addForm, tag_needs_review: e.target.checked })}
-                  className="rounded border-gray-600 bg-gray-800"
-                />
-                <span className="text-gray-400">Tag with Needs Review</span>
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button type="button" onClick={() => setShowAdd(false)} className="btn-secondary">
-                Cancel
-              </button>
-              <button type="button" onClick={saveAdd} className="btn-primary">
-                Add
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <AddVideoModal
+        open={showAdd}
+        onClose={() => setShowAdd(false)}
+        setError={setError}
+        onSuccess={() => loadVideos()}
+      />
 
       <VideoDetailsModal
         videoId={videoIdForDetails}

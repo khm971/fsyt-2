@@ -11,10 +11,6 @@
 
 ---
 
-
-
-
-
 Dial in the download rate
 
 Max = 3600  
@@ -24,5 +20,7 @@ Seems to work well, ran for about a day with just one Google "please sign in" at
 
 Going to try:
 
-2,400/1,000 (3/13) (So Far, so good, on 3/15 at 1:30 PM), including a few manuals.
+2,400/1,000 (3/13) (So Far, so good, on 3/15 at 1:30 PM), including a few manuals.  3.31 after many days of downloading and just one IP switch, this seems reasonable.
+
+
 

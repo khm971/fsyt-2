@@ -4,12 +4,13 @@ import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
 import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter, formatDateTimeWithSeconds } from "../lib/utils";
-import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play } from "lucide-react";
+import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play, Plus } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
 import { ChannelEditModal } from "../components/ChannelEditModal";
 import { LogEntryDetailsModal } from "../components/LogEntryDetailsModal";
+import { AddVideoModal } from "../components/AddVideoModal";
 
 const SEVERITY_COLORS = {
   5: "text-gray-500",
@@ -33,6 +34,7 @@ export default function Dashboard({ setError }) {
   const [videoIdForModal, setVideoIdForModal] = useState(null);
   const [channelIdForModal, setChannelIdForModal] = useState(null);
   const [eventLogIdForModal, setEventLogIdForModal] = useState(null);
+  const [showAddVideo, setShowAddVideo] = useState(false);
   const queueRefreshTriggeredRef = useRef(false);
   const { queueSummary, queueUpdatedAt, logUpdatedAt, transcodeStatusChangedAt, transcodeProgress, serverHeartbeat, multipleInstances, backendInstances, queuePausedFromServer, videoProgressOverrides, refreshSummary } = useQueueWebSocket();
 
@@ -135,7 +137,17 @@ export default function Dashboard({ setError }) {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-semibold text-white">Dashboard</h2>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-xl font-semibold text-white">Dashboard</h2>
+        <button
+          type="button"
+          onClick={() => setShowAddVideo(true)}
+          className="btn-primary flex items-center justify-center gap-2 whitespace-nowrap min-w-[8.5rem] px-5 self-start sm:self-auto"
+        >
+          <Plus className="w-4 h-4 shrink-0" aria-hidden />
+          Add video
+        </button>
+      </div>
 
       {chargeableErrorsLockout && (
         <div className="bg-red-900/50 border border-red-600 rounded-lg px-4 py-3 flex items-center gap-3">
@@ -490,6 +502,12 @@ export default function Dashboard({ setError }) {
         channelId={channelIdForModal}
         onClose={() => setChannelIdForModal(null)}
         setError={setError}
+      />
+      <AddVideoModal
+        open={showAddVideo}
+        onClose={() => setShowAddVideo(false)}
+        setError={setError}
+        onSuccess={() => refreshSummary?.()}
       />
     </div>
   );
