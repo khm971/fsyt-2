@@ -53,6 +53,11 @@ export const api = {
       const q = new URLSearchParams();
       if (params.sort_by != null) q.set("sort_by", params.sort_by);
       if (params.sort_order != null) q.set("sort_order", params.sort_order);
+      const titleTrim = params.title_contains != null ? String(params.title_contains).trim() : "";
+      if (titleTrim) q.set("title_contains", titleTrim);
+      if (params.is_enabled_for_auto_download === true || params.is_enabled_for_auto_download === false) {
+        q.set("is_enabled_for_auto_download", String(params.is_enabled_for_auto_download));
+      }
       const query = q.toString();
       return apiFetch(`/channels${query ? `?${query}` : ""}`);
     },
@@ -91,7 +96,7 @@ export const api = {
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.channel_id != null && params.channel_id !== "") q.set("channel_id", params.channel_id);
-      if (params.include_ignored === true) q.set("include_ignored", "true");
+      if (params.ignored != null && params.ignored !== "") q.set("ignored", params.ignored);
       if (params.status != null && params.status !== "") q.set("status", params.status);
       if (params.title_contains != null && params.title_contains !== "") q.set("title_contains", params.title_contains);
       if (params.has_file === true || params.has_file === false) q.set("has_file", String(params.has_file));
@@ -135,6 +140,7 @@ export const api = {
     create: (body) =>
       apiFetch("/videos", { method: "POST", body: JSON.stringify(body) }),
     update: (id, body) => apiFetch(`/videos/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    resetStatus: (id) => apiFetch(`/videos/${id}/reset-status`, { method: "POST" }),
   },
 
   queue: {
@@ -228,12 +234,20 @@ export const api = {
 
   log: {
     get: (id) => apiFetch(`/log/${id}`),
+    filterOptions: () => apiFetch("/log/filter-options"),
     list: (params = {}) => {
       const q = new URLSearchParams();
       if (params.limit != null) q.set("limit", params.limit);
       if (params.offset != null) q.set("offset", params.offset);
       if (params.video_id != null) q.set("video_id", params.video_id);
       if (params.min_severity != null) q.set("min_severity", params.min_severity);
+      const msg = params.message_contains != null ? String(params.message_contains).trim() : "";
+      if (msg) q.set("message_contains", msg);
+      if (params.job_id != null) q.set("job_id", params.job_id);
+      if (params.channel_id != null) q.set("channel_id", params.channel_id);
+      if (params.acknowledged === true || params.acknowledged === false) q.set("acknowledged", String(params.acknowledged));
+      const sub = params.subsystem != null ? String(params.subsystem).trim() : "";
+      if (sub) q.set("subsystem", sub);
       if (params.sort_by != null) q.set("sort_by", params.sort_by);
       if (params.sort_order != null) q.set("sort_order", params.sort_order);
       const query = q.toString();

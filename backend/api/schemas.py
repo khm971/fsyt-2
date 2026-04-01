@@ -144,6 +144,10 @@ class VideoFilterOptionsResponse(BaseModel):
     tags: list[VideoFilterTagOption]
 
 
+class LogFilterOptionsResponse(BaseModel):
+    subsystems: list[str]
+
+
 # ----- Job queue -----
 class JobQueueCreate(BaseModel):
     job_type: str

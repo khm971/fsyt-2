@@ -2,16 +2,19 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { cn, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
+import { shouldSkipIgnoreVideoConfirm, setSkipIgnoreVideoConfirm } from "../lib/ignoreVideoConfirm";
+import { shouldSkipClearVideoStatusConfirm, setSkipClearVideoStatusConfirm } from "../lib/clearVideoStatusConfirm";
 import {
   Plus, Download, FileSearch, Play, ArrowUp, ArrowDown, ArrowUpDown, Film,
   CheckCircle, Loader2, Search, FileCheck, Brain, Settings, XCircle, AlertCircle, HelpCircle,
-  ListTodo, CircleDot, Eye, EyeOff, AlertTriangle,
+  ListTodo, CircleDot, Eye, EyeOff, AlertTriangle, Bot, IdCard, Lock, Crown, RotateCcw,
 } from "lucide-react";
 import { PaginationBar } from "../components/PaginationBar";
 import Modal from "../components/Modal";
 import VideoColumnFilterModal, {
   DEFAULT_VISIBLE_COLUMNS,
   EMPTY_FILTERS,
+  VIDEO_IGNORED_FILTER,
 } from "../components/VideoColumnFilterModal";
 
 const PAGE_SIZE = 200;
@@ -52,7 +55,17 @@ function loadStoredFilters() {
     const s = localStorage.getItem(VIDEOS_FILTERS_KEY);
     if (s) {
       const o = JSON.parse(s);
-      if (o && typeof o === "object") return { ...EMPTY_FILTERS, ...o };
+      if (o && typeof o === "object") {
+        const merged = { ...EMPTY_FILTERS, ...o };
+        if (Object.prototype.hasOwnProperty.call(o, "include_ignored") && !Object.prototype.hasOwnProperty.call(o, "ignored")) {
+          merged.ignored = o.include_ignored ? VIDEO_IGNORED_FILTER.ALL : VIDEO_IGNORED_FILTER.NOT_IGNORED;
+        }
+        delete merged.include_ignored;
+        if (!["not_ignored", "only_ignored", "all"].includes(merged.ignored)) {
+          merged.ignored = VIDEO_IGNORED_FILTER.NOT_IGNORED;
+        }
+        return merged;
+      }
     }
   } catch (_) {}
   return { ...EMPTY_FILTERS };
@@ -61,7 +74,7 @@ function loadStoredFilters() {
 function filtersToParams(filters) {
   const p = {};
   if (filters.channel_id) p.channel_id = parseInt(filters.channel_id, 10);
-  if (filters.include_ignored) p.include_ignored = true;
+  p.ignored = filters.ignored || VIDEO_IGNORED_FILTER.NOT_IGNORED;
   if (filters.status) p.status = filters.status;
   const titleTrim = (filters.title_contains || "").trim();
   if (titleTrim) p.title_contains = titleTrim;
@@ -84,7 +97,7 @@ function hasActiveFilters(filters) {
     filters.has_transcode !== null ||
     filters.watch_finished !== null ||
     filters.tag_id ||
-    filters.include_ignored ||
+    (filters.ignored && filters.ignored !== VIDEO_IGNORED_FILTER.NOT_IGNORED) ||
     filters.record_created_from ||
     filters.record_created_to ||
     (filters.video_id !== "" && filters.video_id != null)
@@ -135,6 +148,46 @@ function getStatusColor(status) {
 function formatStatus(s) {
   if (!s) return "—";
   return STATUS_LABELS[s] ?? s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Strip leading yt-dlp-style noise: optional "ERROR: ", "[extractor] ", video id, ":" — keep human message only. */
+function stripDownloadToolStatusPrefix(s) {
+  if (!s || typeof s !== "string") return s;
+  const re = /^(?:[A-Z][A-Z0-9_]*:\s*)?(?:\[[^\]]+\]\s+)[A-Za-z0-9_-]{6,24}:\s*/;
+  const next = s.replace(re, "").trim();
+  return next.length > 0 ? next : s;
+}
+
+/** Status text column body: cleaned `status_message` only (no status label prefix). */
+function statusTextForColumnCell(status, statusMessage) {
+  const msg = (statusMessage || "").trim();
+  if (msg) return stripDownloadToolStatusPrefix(msg);
+  return formatStatus(status);
+}
+
+/** Normalize status_message for substring checks (curly apostrophe, etc.). */
+function normalizeStatusMessageHints(s) {
+  if (!s || typeof s !== "string") return "";
+  return s.replace(/\u2019/g, "'").toLowerCase();
+}
+
+function statusMessageIndicatesBotChallenge(statusMessage) {
+  return normalizeStatusMessageHints(statusMessage).includes("sign in to confirm you're not a bot");
+}
+
+function statusMessageIndicatesAgeVerification(statusMessage) {
+  const n = normalizeStatusMessageHints(statusMessage);
+  return n.includes("sign in to confirm your age");
+}
+
+function statusMessageIndicatesPrivateVideo(statusMessage) {
+  return normalizeStatusMessageHints(statusMessage).includes("private video");
+}
+
+function statusMessageIndicatesChannelMembersOnly(statusMessage) {
+  return normalizeStatusMessageHints(statusMessage).includes(
+    "this video is available to this channel's members"
+  );
 }
 
 const JOB_TYPE_ICONS = {
@@ -191,7 +244,11 @@ export default function Videos({ setError }) {
   const [videoIdForTagEdit, setVideoIdForTagEdit] = useState(null);
   const [editingChannelId, setEditingChannelId] = useState(null);
   const [ignoreConfirm, setIgnoreConfirm] = useState(null);
-  const [ignoreLoading, setIgnoreLoading] = useState(false);
+  const [ignoreBusyVideoId, setIgnoreBusyVideoId] = useState(null);
+  const [ignoreDontAskAgain, setIgnoreDontAskAgain] = useState(false);
+  const [clearStatusConfirm, setClearStatusConfirm] = useState(null);
+  const [clearStatusBusyVideoId, setClearStatusBusyVideoId] = useState(null);
+  const [clearStatusDontAskAgain, setClearStatusDontAskAgain] = useState(false);
   const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
 
   const filterListParams = useMemo(() => filtersToParams(filters), [filters]);
@@ -282,6 +339,14 @@ export default function Videos({ setError }) {
     if (videoUpdatedAt > 0) loadVideos();
   }, [videoUpdatedAt, loadVideos]);
 
+  useEffect(() => {
+    if (ignoreConfirm) setIgnoreDontAskAgain(false);
+  }, [ignoreConfirm]);
+
+  useEffect(() => {
+    if (clearStatusConfirm) setClearStatusDontAskAgain(false);
+  }, [clearStatusConfirm]);
+
   const openAdd = () => setShowAdd(true);
 
   const queueVideoJob = async (videoId, jobType) => {
@@ -295,21 +360,55 @@ export default function Videos({ setError }) {
     }
   };
 
-  const performIgnoreConfirm = async () => {
-    if (!ignoreConfirm) return;
-    setIgnoreLoading(true);
+  const performIgnoreToggle = async (videoId, isIgnore, { persistDontAskAgain = false } = {}) => {
+    setIgnoreBusyVideoId(videoId);
     try {
-      await api.videos.update(ignoreConfirm.videoId, { is_ignore: ignoreConfirm.isIgnore });
+      if (persistDontAskAgain) setSkipIgnoreVideoConfirm(true);
+      await api.videos.update(videoId, { is_ignore: isIgnore });
       setError(null);
-      toast.addToast(ignoreConfirm.isIgnore ? "Video ignored" : "Video unignored", "success");
+      toast.addToast(isIgnore ? "Video ignored" : "Video unignored", "success");
       setIgnoreConfirm(null);
       await loadVideos();
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
     } finally {
-      setIgnoreLoading(false);
+      setIgnoreBusyVideoId(null);
     }
+  };
+
+  const performIgnoreConfirm = async () => {
+    if (!ignoreConfirm) return;
+    await performIgnoreToggle(ignoreConfirm.videoId, ignoreConfirm.isIgnore, {
+      persistDontAskAgain: ignoreDontAskAgain,
+    });
+  };
+
+  const rowActionBusy = (videoId) =>
+    ignoreBusyVideoId === videoId || clearStatusBusyVideoId === videoId;
+
+  const performClearStatusToggle = async (videoId, { persistDontAskAgain = false } = {}) => {
+    setClearStatusBusyVideoId(videoId);
+    try {
+      if (persistDontAskAgain) setSkipClearVideoStatusConfirm(true);
+      await api.videos.resetStatus(videoId);
+      setError(null);
+      toast.addToast("Video status cleared (no metadata)", "success");
+      setClearStatusConfirm(null);
+      await loadVideos();
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+    } finally {
+      setClearStatusBusyVideoId(null);
+    }
+  };
+
+  const performClearStatusConfirm = async () => {
+    if (!clearStatusConfirm) return;
+    await performClearStatusToggle(clearStatusConfirm.videoId, {
+      persistDontAskAgain: clearStatusDontAskAgain,
+    });
   };
 
   const activeFilters = hasActiveFilters(filters);
@@ -429,6 +528,9 @@ export default function Videos({ setError }) {
               {visibleColumns.includes("status") && (
                 <th className="px-4 py-3 font-medium min-w-0 max-w-[12rem]">Status</th>
               )}
+              {visibleColumns.includes("status_text") && (
+                <th className="px-4 py-3 font-medium min-w-0 max-w-[16rem]">Status text</th>
+              )}
               <th className="px-4 py-3 font-medium">
                 <div className="flex items-center gap-1">
                   Flags
@@ -469,6 +571,10 @@ export default function Videos({ setError }) {
               const pendingJob = pendingJobFromApi ?? pendingJobFromWs;
               const StatusIconComponent = status ? (STATUS_ICONS[status] ?? HelpCircle) : HelpCircle;
               const statusTooltip = [formatStatus(status), v.status_message].filter(Boolean).join(" — ");
+              const showBotChallengeFlag = statusMessageIndicatesBotChallenge(v.status_message);
+              const showAgeVerificationFlag = statusMessageIndicatesAgeVerification(v.status_message);
+              const showPrivateVideoFlag = statusMessageIndicatesPrivateVideo(v.status_message);
+              const showChannelMembersFlag = statusMessageIndicatesChannelMembersOnly(v.status_message);
               return (
               <tr key={v.video_id} className="hover:bg-gray-800/30">
                 {visibleColumns.includes("id") && (
@@ -553,6 +659,14 @@ export default function Videos({ setError }) {
                     {status || "—"}
                   </td>
                 )}
+                {visibleColumns.includes("status_text") && (
+                  <td
+                    className="px-4 py-2 text-gray-300 text-xs truncate max-w-[16rem] min-w-0"
+                    title={statusTooltip || undefined}
+                  >
+                    {statusTextForColumnCell(status, v.status_message) || "—"}
+                  </td>
+                )}
                 <td className="px-4 py-2 min-w-[140px]">
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-center gap-1.5">
@@ -583,6 +697,50 @@ export default function Videos({ setError }) {
                           </Tooltip>
                         );
                       })()}
+                      {showBotChallengeFlag && (
+                        <Tooltip
+                          title="Sign-in may be required: source reports a bot check ('confirm you're not a bot')."
+                          side="top"
+                          wrap
+                        >
+                          <span className="inline-flex shrink-0 text-red-500" aria-label="Bot check may be required">
+                            <Bot className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
+                      {showAgeVerificationFlag && (
+                        <Tooltip
+                          title="Sign-in may be required: age verification ('confirm your age')."
+                          side="top"
+                          wrap
+                        >
+                          <span className="inline-flex shrink-0 text-yellow-400" aria-label="Age verification may be required">
+                            <IdCard className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
+                      {showPrivateVideoFlag && (
+                        <Tooltip
+                          title="Status text indicates this video is private (may require access or sign-in)."
+                          side="top"
+                          wrap
+                        >
+                          <span className="inline-flex shrink-0 text-yellow-400" aria-label="Private video">
+                            <Lock className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
+                      {showChannelMembersFlag && (
+                        <Tooltip
+                          title="Status text indicates this video is for the channel's members only (membership may be required)."
+                          side="top"
+                          wrap
+                        >
+                          <span className="inline-flex shrink-0 text-amber-400" aria-label="Channel members only">
+                            <Crown className="w-4 h-4" />
+                          </span>
+                        </Tooltip>
+                      )}
                     </div>
                     {showProgress && (
                       <div className="w-full max-w-[120px] h-1.5 bg-gray-700 rounded-full overflow-hidden">
@@ -594,7 +752,7 @@ export default function Videos({ setError }) {
                     )}
                   </div>
                 </td>
-                <td className="px-4 py-2 flex gap-1 flex-nowrap">
+                <td className="px-4 py-2 flex gap-1 flex-wrap">
                   <Tooltip title={
                     v.watch_is_finished ? "Play (finished)" :
                     (v.watch_progress_percent != null && v.watch_progress_percent > 0 && v.watch_progress_percent < 95) ? `Play (in progress, ${Math.round(v.watch_progress_percent)}%)` :
@@ -636,20 +794,40 @@ export default function Videos({ setError }) {
                       <Download className="w-4 h-4" />
                     </button>
                   </Tooltip>
+                  <Tooltip title="Clear status — reset to No metadata (as when first added); does not delete files" side="top" wrap>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (shouldSkipClearVideoStatusConfirm()) {
+                          void performClearStatusToggle(v.video_id);
+                        } else {
+                          setClearStatusConfirm({ videoId: v.video_id });
+                        }
+                      }}
+                      disabled={rowActionBusy(v.video_id)}
+                      className="p-1.5 text-gray-400 hover:text-orange-400 hover:bg-gray-700 rounded disabled:opacity-50 disabled:pointer-events-none"
+                      aria-label="Clear video status"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                  </Tooltip>
                   <Tooltip title={v.is_ignore ? "Unignore video" : "Ignore video"} side="top" wrap>
                     <button
                       type="button"
-                      onClick={() =>
-                        setIgnoreConfirm({
-                          videoId: v.video_id,
-                          isIgnore: !v.is_ignore,
-                        })
-                      }
+                      onClick={() => {
+                        const isIgnore = !v.is_ignore;
+                        if (shouldSkipIgnoreVideoConfirm()) {
+                          void performIgnoreToggle(v.video_id, isIgnore);
+                        } else {
+                          setIgnoreConfirm({ videoId: v.video_id, isIgnore });
+                        }
+                      }}
+                      disabled={rowActionBusy(v.video_id)}
                       className={cn(
-                        "p-1.5 rounded",
+                        "p-1.5 rounded disabled:opacity-50 disabled:pointer-events-none",
                         v.is_ignore
                           ? "text-yellow-400 hover:text-yellow-300 hover:bg-gray-700"
-                          : "text-gray-400 hover:text-yellow-400 hover:bg-gray-700"
+                          : "text-gray-400 hover:text-yellow-400 hover:bg-gray-700",
                       )}
                       aria-label={v.is_ignore ? "Unignore video" : "Ignore video"}
                     >
@@ -763,10 +941,56 @@ export default function Videos({ setError }) {
         onJobCanceled={loadVideos}
       />
 
+      {clearStatusConfirm && (
+        <Modal
+          title="Clear video status"
+          onClose={() => clearStatusBusyVideoId == null && setClearStatusConfirm(null)}
+        >
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-lg border border-blue-900/60 bg-blue-950/30 p-4">
+              <div className="rounded-full bg-blue-900/50 p-2 text-blue-300">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium text-white">
+                Reset processing status to <span className="font-mono text-blue-200">no_metadata</span> (same as when the video was first added, before download). The status message is cleared. Downloaded files are not removed.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={clearStatusDontAskAgain}
+                onChange={(e) => setClearStatusDontAskAgain(e.target.checked)}
+                disabled={clearStatusBusyVideoId != null}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 shrink-0"
+              />
+              Don&apos;t ask again (until you refresh or close this tab)
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setClearStatusConfirm(null)}
+                disabled={clearStatusBusyVideoId != null}
+                className="btn-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={performClearStatusConfirm}
+                disabled={clearStatusBusyVideoId != null}
+                className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
+              >
+                {clearStatusBusyVideoId != null ? "Please wait…" : "Clear status"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {ignoreConfirm && (
         <Modal
           title={ignoreConfirm.isIgnore ? "Ignore video" : "Unignore video"}
-          onClose={() => !ignoreLoading && setIgnoreConfirm(null)}
+          onClose={() => ignoreBusyVideoId == null && setIgnoreConfirm(null)}
         >
           <div className="space-y-4">
             <div className="flex items-start gap-3 rounded-lg border border-yellow-900/60 bg-yellow-950/30 p-4">
@@ -779,11 +1003,21 @@ export default function Videos({ setError }) {
                   : "Unignore this video?"}
               </p>
             </div>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={ignoreDontAskAgain}
+                onChange={(e) => setIgnoreDontAskAgain(e.target.checked)}
+                disabled={ignoreBusyVideoId != null}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 shrink-0"
+              />
+              Don&apos;t ask again (until you refresh or close this tab)
+            </label>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setIgnoreConfirm(null)}
-                disabled={ignoreLoading}
+                disabled={ignoreBusyVideoId != null}
                 className="btn-secondary disabled:opacity-50"
               >
                 Cancel
@@ -791,10 +1025,10 @@ export default function Videos({ setError }) {
               <button
                 type="button"
                 onClick={performIgnoreConfirm}
-                disabled={ignoreLoading}
+                disabled={ignoreBusyVideoId != null}
                 className="rounded-lg bg-yellow-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-yellow-600 disabled:opacity-50"
               >
-                {ignoreLoading ? "Please wait…" : "Yes"}
+                {ignoreBusyVideoId != null ? "Please wait…" : "Yes"}
               </button>
             </div>
           </div>

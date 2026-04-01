@@ -14,12 +14,25 @@ const OPTIONAL_COLUMNS = [
   { key: "watch_progress", label: "Watch progress", defaultVisible: false },
   { key: "created_by", label: "Created by", defaultVisible: false },
   { key: "status", label: "Status (raw)", defaultVisible: false },
+  { key: "status_text", label: "Status text", defaultVisible: false },
 ];
 
 export const DEFAULT_VISIBLE_COLUMNS = OPTIONAL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);
 
 /** Sentinel `status` filter value; API matches any status containing "error" (case-insensitive). */
 export const VIDEO_STATUS_FILTER_ANY_ERROR = "__any_error__";
+
+export const VIDEO_IGNORED_FILTER = {
+  NOT_IGNORED: "not_ignored",
+  ONLY_IGNORED: "only_ignored",
+  ALL: "all",
+};
+
+const IGNORED_OPTIONS = [
+  { value: VIDEO_IGNORED_FILTER.NOT_IGNORED, label: "Not ignored" },
+  { value: VIDEO_IGNORED_FILTER.ONLY_IGNORED, label: "Only ignored" },
+  { value: VIDEO_IGNORED_FILTER.ALL, label: "All" },
+];
 
 const EMPTY_FILTERS = {
   channel_id: "",
@@ -29,7 +42,7 @@ const EMPTY_FILTERS = {
   has_transcode: null,
   watch_finished: null,
   tag_id: "",
-  include_ignored: false,
+  ignored: VIDEO_IGNORED_FILTER.NOT_IGNORED,
   record_created_from: "",
   record_created_to: "",
   video_id: "",
@@ -251,14 +264,19 @@ export default function VideoColumnFilterModal({
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-2 text-gray-300 cursor-pointer mt-6 sm:mt-8">
-              <input
-                type="checkbox"
-                checked={localFilters.include_ignored}
-                onChange={(e) => setLocalFilters((prev) => ({ ...prev, include_ignored: e.target.checked }))}
-                className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 shrink-0"
-              />
-              <span className="text-sm">Show ignored videos</span>
+            <label className="block sm:col-span-2">
+              <span className="text-gray-400 block mb-1">Ignored videos</span>
+              <select
+                value={localFilters.ignored || VIDEO_IGNORED_FILTER.NOT_IGNORED}
+                onChange={(e) => updateFilter("ignored", e.target.value)}
+                className="input w-full min-w-0"
+              >
+                {IGNORED_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </label>
             <div className="sm:col-span-2 border-t border-gray-700 pt-3 mt-1">
               <span className="text-gray-400 block mb-2">Date ranges</span>

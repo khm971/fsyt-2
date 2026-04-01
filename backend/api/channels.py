@@ -3,9 +3,14 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from database import db
 from api.schemas import ChannelCreate, ChannelUpdate, ChannelResponse
-from log_helper import log_event, SEVERITY_INFO
+from log_helper import log_event, SEVERITY_INFO, SEVERITY_DEBUG
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+
+
+def _escape_ilike(term: str) -> str:
+    """Escape % and _ for safe use in ILIKE pattern (use ESCAPE '\\' in SQL)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def row_to_channel(r) -> ChannelResponse:
@@ -32,25 +37,60 @@ def row_to_channel(r) -> ChannelResponse:
 
 @router.get("", response_model=list[ChannelResponse])
 async def list_channels(
-    sort_by: str = Query("id", pattern="^(id|title|status)$"),
+    sort_by: str = Query("id", pattern="^(id|title|status|video_count|record_created)$"),
     sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    title_contains: str | None = Query(None),
+    is_enabled_for_auto_download: bool | None = Query(None),
 ):
+    title_term = (title_contains or "").strip() or None
+    where_parts: list[str] = []
+    params: list = []
+    pi = 1
+    if title_term:
+        pat = f"%{_escape_ilike(title_term)}%"
+        where_parts.append(
+            f"(COALESCE(c.title, '') ILIKE ${pi} ESCAPE E'\\\\' OR COALESCE(c.handle, '') ILIKE ${pi} ESCAPE E'\\\\')"
+        )
+        params.append(pat)
+        pi += 1
+    if is_enabled_for_auto_download is True:
+        where_parts.append("c.is_enabled_for_auto_download IS TRUE")
+    elif is_enabled_for_auto_download is False:
+        where_parts.append("c.is_enabled_for_auto_download IS NOT TRUE")
+    where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    if title_term or is_enabled_for_auto_download is not None:
+        await log_event(
+            f"Channel list filters: title_contains={bool(title_term)} auto_download={is_enabled_for_auto_download!r}",
+            SEVERITY_DEBUG,
+        )
+
+    video_total_sub = (
+        "(SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE))::int"
+    )
+    video_available_sub = (
+        "(SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')::int"
+    )
     col = {
         "id": "c.channel_id",
         "title": "c.title",
-        "status": "(SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')",
+        "status": video_available_sub,
+        "video_count": video_total_sub,
+        "record_created": "c.record_created",
     }[sort_by]
     dirn = "ASC" if sort_order == "asc" else "DESC"
     rows = await db.fetch(
         f"""SELECT c.channel_id, c.provider_key, c.record_created, c.record_updated,
                   c.handle, c.title, c.url, c.thumbnail, c.banner, c.author, c.description,
                   c.is_enabled_for_auto_download, c.folder_on_disk,
-                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE))::int AS video_count,
-                  (SELECT COUNT(*) FROM video v WHERE v.channel_id = c.channel_id AND (v.is_ignore IS NOT TRUE) AND v.status = 'available')::int AS video_count_done,
+                  {video_total_sub} AS video_count,
+                  {video_available_sub} AS video_count_done,
                   c.created_by_user_id, u.username AS created_by_username
            FROM channel c
            LEFT JOIN app_user u ON c.created_by_user_id = u.user_id
-           ORDER BY {col} {dirn}"""
+           {where_sql}
+           ORDER BY {col} {dirn}""",
+        *params,
     )
     return [row_to_channel(r) for r in rows]
 

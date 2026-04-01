@@ -95,7 +95,11 @@ def row_to_video(r) -> VideoResponse:
 async def list_videos(
     request: Request,
     channel_id: int | None = Query(None),
-    include_ignored: bool = Query(False),
+    ignored: str = Query(
+        "not_ignored",
+        pattern="^(not_ignored|only_ignored|all)$",
+        description="not_ignored: hide ignored; only_ignored: ignored rows only; all: no filter on is_ignore",
+    ),
     status: str | None = Query(None),
     title_contains: str | None = Query(None),
     has_file: bool | None = Query(None),
@@ -120,8 +124,10 @@ async def list_videos(
         count_where_parts.append(f"v.channel_id = ${ci}")
         count_params.append(channel_id)
         ci += 1
-    if not include_ignored:
+    if ignored == "not_ignored":
         count_where_parts.append("(v.is_ignore IS NOT TRUE)")
+    elif ignored == "only_ignored":
+        count_where_parts.append("(v.is_ignore IS TRUE)")
     if status:
         if status == STATUS_FILTER_ANY_ERROR:
             count_where_parts.append("(COALESCE(v.status, '') ILIKE '%error%')")
@@ -183,8 +189,10 @@ async def list_videos(
         main_where_parts.append(f"v.channel_id = ${i}")
         params.append(channel_id)
         i += 1
-    if not include_ignored:
+    if ignored == "not_ignored":
         main_where_parts.append("(v.is_ignore IS NOT TRUE)")
+    elif ignored == "only_ignored":
+        main_where_parts.append("(v.is_ignore IS TRUE)")
     if status:
         if status == STATUS_FILTER_ANY_ERROR:
             main_where_parts.append("(COALESCE(v.status, '') ILIKE '%error%')")
@@ -232,8 +240,8 @@ async def list_videos(
     filter_log_bits = []
     if channel_id is not None:
         filter_log_bits.append(f"channel_id={channel_id}")
-    if include_ignored:
-        filter_log_bits.append("include_ignored=True")
+    if ignored != "not_ignored":
+        filter_log_bits.append(f"ignored={ignored!r}")
     if status:
         filter_log_bits.append(f"status={status!r}")
     if title_term:
@@ -1128,6 +1136,33 @@ async def get_video(video_id: int):
     if not r:
         raise HTTPException(404, "Video not found")
     return row_to_video(r)
+
+
+@router.post("/{video_id}/reset-status", response_model=VideoResponse)
+async def reset_video_status(request: Request, video_id: int):
+    """Reset processing status to newly-inserted state: no_metadata and no status message (does not remove files)."""
+    user_id = getattr(request.state, "user_id", None)
+    r = await db.fetchrow(
+        """UPDATE video SET status = 'no_metadata', status_message = NULL
+           WHERE video_id = $1
+           RETURNING video_id, provider_key, channel_id, title, upload_date, description,
+                     llm_description_1, thumbnail, file_path, transcode_path, download_date, duration,
+                     record_created, status,
+                     status_message, is_ignore, metadata_last_updated, nfo_last_written""",
+        video_id,
+    )
+    if not r:
+        raise HTTPException(404, "Video not found")
+    title_or_key = r.get("title") or r.get("provider_key") or f"video_id={video_id}"
+    await log_event(
+        f"Video status cleared (no_metadata): video_id={video_id} ({title_or_key})",
+        SEVERITY_NOTICE,
+        video_id=video_id,
+        channel_id=r.get("channel_id"),
+        user_id=user_id,
+    )
+    await broadcast_video_updated(video_id)
+    return row_to_video(dict(r, status_percent_complete=None))
 
 
 @router.post("", response_model=VideoResponse, status_code=201)

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../api/client";
 import { cn, formatDateTime, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
+import { shouldSkipIgnoreVideoConfirm, setSkipIgnoreVideoConfirm } from "../lib/ignoreVideoConfirm";
 import {
   Hash,
   Users,
@@ -130,6 +131,7 @@ export function VideoDetailsModal({
   const [tagActionLoading, setTagActionLoading] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+  const [ignoreConfirmDontAskAgain, setIgnoreConfirmDontAskAgain] = useState(false);
   const [jobQueueLoading, setJobQueueLoading] = useState(null);
   const tagSearchDebounceRef = useRef(null);
   const contextMenuRef = useRef(null);
@@ -204,6 +206,10 @@ export function VideoDetailsModal({
     };
   }, [contextMenu]);
 
+  useEffect(() => {
+    if (confirmAction) setIgnoreConfirmDontAskAgain(false);
+  }, [confirmAction]);
+
   const refreshVideo = useCallback(() => {
     if (videoId == null) return;
     api.videos.get(videoId).then(setVideo).catch((e) => setError(e.message));
@@ -213,14 +219,14 @@ export function VideoDetailsModal({
     if (video?.channel_id != null && onOpenChannelEdit) onOpenChannelEdit(video.channel_id);
   };
 
-  const performConfirmAction = async () => {
-    if (!confirmAction) return;
+  const executeIgnoreToggle = async (targetVideoId, isIgnore, persistDontAskAgain = false) => {
     setConfirmLoading(true);
     try {
-      await api.videos.update(confirmAction.videoId, { is_ignore: confirmAction.isIgnore });
+      if (persistDontAskAgain) setSkipIgnoreVideoConfirm(true);
+      await api.videos.update(targetVideoId, { is_ignore: isIgnore });
       refreshVideo();
       onVideoUpdated?.();
-      toast.addToast(confirmAction.isIgnore ? "Video ignored" : "Video unignored", "success");
+      toast.addToast(isIgnore ? "Video ignored" : "Video unignored", "success");
       setConfirmAction(null);
     } catch (e) {
       setError(e.message);
@@ -228,6 +234,11 @@ export function VideoDetailsModal({
     } finally {
       setConfirmLoading(false);
     }
+  };
+
+  const performConfirmAction = async () => {
+    if (!confirmAction) return;
+    await executeIgnoreToggle(confirmAction.videoId, confirmAction.isIgnore, ignoreConfirmDontAskAgain);
   };
 
   const queueVideoJob = async (jobType) => {
@@ -824,9 +835,17 @@ export function VideoDetailsModal({
               })()}
               <button
                 type="button"
-                onClick={() => setConfirmAction({ type: "ignore", videoId: video.video_id, isIgnore: !video.is_ignore })}
+                disabled={confirmLoading}
+                onClick={() => {
+                  const isIgnore = !video.is_ignore;
+                  if (shouldSkipIgnoreVideoConfirm()) {
+                    void executeIgnoreToggle(video.video_id, isIgnore, false);
+                  } else {
+                    setConfirmAction({ type: "ignore", videoId: video.video_id, isIgnore });
+                  }
+                }}
                 className={cn(
-                  "p-2 rounded text-sm font-medium transition-colors",
+                  "p-2 rounded text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none",
                   video.is_ignore
                     ? "text-yellow-400 hover:text-yellow-300 hover:bg-gray-700"
                     : "text-gray-400 hover:text-yellow-400 hover:bg-gray-700"
@@ -892,6 +911,16 @@ export function VideoDetailsModal({
                   : "Unignore this video?"}
               </p>
             </div>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={ignoreConfirmDontAskAgain}
+                onChange={(e) => setIgnoreConfirmDontAskAgain(e.target.checked)}
+                disabled={confirmLoading}
+                className="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 shrink-0"
+              />
+              Don&apos;t ask again (until you refresh or close this tab)
+            </label>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
