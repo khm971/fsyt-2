@@ -134,6 +134,16 @@ class VideoListResponse(BaseModel):
     total: int
 
 
+class VideoFilterTagOption(BaseModel):
+    tag_id: int
+    title: str
+
+
+class VideoFilterOptionsResponse(BaseModel):
+    statuses: list[str]
+    tags: list[VideoFilterTagOption]
+
+
 # ----- Job queue -----
 class JobQueueCreate(BaseModel):
     job_type: str

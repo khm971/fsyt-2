@@ -80,7 +80,11 @@ export default function QueueColumnFilterModal({
   };
 
   const handleClearFilters = () => {
-    setLocalFilters({ ...EMPTY_FILTERS });
+    const cleared = { ...EMPTY_FILTERS };
+    setLocalFilters(cleared);
+    onVisibleColumnsChange(localColumns);
+    onFiltersChange(cleared);
+    onClose();
   };
 
   const handleResetColumns = () => {

@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import shutil
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -12,7 +13,15 @@ from fastapi.responses import FileResponse, StreamingResponse
 from database import db
 from services.tools import get_media_root
 from pydantic import BaseModel
-from api.schemas import VideoCreate, VideoUpdate, VideoResponse, VideoListResponse, TagResponse
+from api.schemas import (
+    VideoCreate,
+    VideoUpdate,
+    VideoResponse,
+    VideoListResponse,
+    VideoFilterOptionsResponse,
+    VideoFilterTagOption,
+    TagResponse,
+)
 from log_helper import log_event, SEVERITY_LOW_LEVEL, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_NOTICE, SEVERITY_WARNING, SEVERITY_ERROR
 
 # HLS transcode cache: video_id -> { dir, proc, ready }
@@ -41,6 +50,14 @@ import db_helpers
 from job_processor import broadcast_queue_update, broadcast_transcode_status_changed, broadcast_video_updated
 
 router = APIRouter(prefix="/videos", tags=["videos"])
+
+# Video list `status` query param: match any status whose value contains "error" (case-insensitive).
+STATUS_FILTER_ANY_ERROR = "__any_error__"
+
+
+def _escape_ilike(term: str) -> str:
+    """Escape % and _ for safe use in ILIKE pattern (use ESCAPE '\\' in SQL)."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def row_to_video(r) -> VideoResponse:
@@ -79,12 +96,23 @@ async def list_videos(
     request: Request,
     channel_id: int | None = Query(None),
     include_ignored: bool = Query(False),
+    status: str | None = Query(None),
+    title_contains: str | None = Query(None),
+    has_file: bool | None = Query(None),
+    has_transcode: bool | None = Query(None),
+    watch_finished: bool | None = Query(None),
+    tag_id: int | None = Query(None),
+    record_created_from: datetime | None = Query(None),
+    record_created_to: datetime | None = Query(None),
+    video_id: int | None = Query(None),
     limit: int = Query(200, le=500),
     offset: int = Query(0, ge=0),
     sort_by: str = Query("id", pattern="^(id|title|status)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     user_id = request.state.user_id
+    title_term = (title_contains or "").strip() or None
+
     count_where_parts = ["1=1"]
     count_params: list = []
     ci = 1
@@ -94,8 +122,57 @@ async def list_videos(
         ci += 1
     if not include_ignored:
         count_where_parts.append("(v.is_ignore IS NOT TRUE)")
-    count_where_sql = " AND ".join(count_where_parts)
+    if status:
+        if status == STATUS_FILTER_ANY_ERROR:
+            count_where_parts.append("(COALESCE(v.status, '') ILIKE '%error%')")
+        else:
+            count_where_parts.append(f"v.status = ${ci}")
+            count_params.append(status)
+            ci += 1
+    if title_term:
+        count_where_parts.append(f"v.title ILIKE ${ci} ESCAPE E'\\\\'")
+        count_params.append(f"%{_escape_ilike(title_term)}%")
+        ci += 1
+    if has_file is True:
+        count_where_parts.append("(v.file_path IS NOT NULL AND BTRIM(COALESCE(v.file_path, '')) <> '')")
+    elif has_file is False:
+        count_where_parts.append("(v.file_path IS NULL OR BTRIM(COALESCE(v.file_path, '')) = '')")
+    if has_transcode is True:
+        count_where_parts.append("(v.transcode_path IS NOT NULL)")
+    elif has_transcode is False:
+        count_where_parts.append("(v.transcode_path IS NULL)")
+    if video_id is not None:
+        count_where_parts.append(f"v.video_id = ${ci}")
+        count_params.append(video_id)
+        ci += 1
+    if record_created_from is not None:
+        count_where_parts.append(f"v.record_created >= ${ci}")
+        count_params.append(record_created_from)
+        ci += 1
+    if record_created_to is not None:
+        count_where_parts.append(f"v.record_created <= ${ci}")
+        count_params.append(record_created_to)
+        ci += 1
+    if tag_id is not None:
+        count_where_parts.append(
+            f"EXISTS (SELECT 1 FROM video_tag vt WHERE vt.video_id = v.video_id AND vt.tag_id = ${ci})"
+        )
+        count_params.append(tag_id)
+        ci += 1
+    if watch_finished is True:
+        count_where_parts.append(
+            f"EXISTS (SELECT 1 FROM user_video uvf WHERE uvf.video_id = v.video_id AND uvf.user_id = ${ci} AND uvf.is_finished IS TRUE)"
+        )
+        count_params.append(user_id)
+        ci += 1
+    elif watch_finished is False:
+        count_where_parts.append(
+            f"NOT EXISTS (SELECT 1 FROM user_video uvf WHERE uvf.video_id = v.video_id AND uvf.user_id = ${ci} AND uvf.is_finished IS TRUE)"
+        )
+        count_params.append(user_id)
+        ci += 1
 
+    count_where_sql = " AND ".join(count_where_parts)
     count_q = f"SELECT COUNT(*) FROM video v WHERE {count_where_sql}"
     total = await db.fetchval(count_q, *count_params) or 0
 
@@ -108,7 +185,79 @@ async def list_videos(
         i += 1
     if not include_ignored:
         main_where_parts.append("(v.is_ignore IS NOT TRUE)")
+    if status:
+        if status == STATUS_FILTER_ANY_ERROR:
+            main_where_parts.append("(COALESCE(v.status, '') ILIKE '%error%')")
+        else:
+            main_where_parts.append(f"v.status = ${i}")
+            params.append(status)
+            i += 1
+    if title_term:
+        main_where_parts.append(f"v.title ILIKE ${i} ESCAPE E'\\\\'")
+        params.append(f"%{_escape_ilike(title_term)}%")
+        i += 1
+    if has_file is True:
+        main_where_parts.append("(v.file_path IS NOT NULL AND BTRIM(COALESCE(v.file_path, '')) <> '')")
+    elif has_file is False:
+        main_where_parts.append("(v.file_path IS NULL OR BTRIM(COALESCE(v.file_path, '')) = '')")
+    if has_transcode is True:
+        main_where_parts.append("(v.transcode_path IS NOT NULL)")
+    elif has_transcode is False:
+        main_where_parts.append("(v.transcode_path IS NULL)")
+    if video_id is not None:
+        main_where_parts.append(f"v.video_id = ${i}")
+        params.append(video_id)
+        i += 1
+    if record_created_from is not None:
+        main_where_parts.append(f"v.record_created >= ${i}")
+        params.append(record_created_from)
+        i += 1
+    if record_created_to is not None:
+        main_where_parts.append(f"v.record_created <= ${i}")
+        params.append(record_created_to)
+        i += 1
+    if tag_id is not None:
+        main_where_parts.append(
+            f"EXISTS (SELECT 1 FROM video_tag vt WHERE vt.video_id = v.video_id AND vt.tag_id = ${i})"
+        )
+        params.append(tag_id)
+        i += 1
+    if watch_finished is True:
+        main_where_parts.append("(uv.is_finished IS TRUE)")
+    elif watch_finished is False:
+        main_where_parts.append("(COALESCE(uv.is_finished, FALSE) IS NOT TRUE)")
+
     main_where_sql = " AND ".join(main_where_parts)
+
+    filter_log_bits = []
+    if channel_id is not None:
+        filter_log_bits.append(f"channel_id={channel_id}")
+    if include_ignored:
+        filter_log_bits.append("include_ignored=True")
+    if status:
+        filter_log_bits.append(f"status={status!r}")
+    if title_term:
+        filter_log_bits.append("title_contains=…")
+    if has_file is not None:
+        filter_log_bits.append(f"has_file={has_file}")
+    if has_transcode is not None:
+        filter_log_bits.append(f"has_transcode={has_transcode}")
+    if watch_finished is not None:
+        filter_log_bits.append(f"watch_finished={watch_finished}")
+    if tag_id is not None:
+        filter_log_bits.append(f"tag_id={tag_id}")
+    if record_created_from is not None:
+        filter_log_bits.append("record_created_from=…")
+    if record_created_to is not None:
+        filter_log_bits.append("record_created_to=…")
+    if video_id is not None:
+        filter_log_bits.append(f"video_id={video_id}")
+    if filter_log_bits:
+        await log_event(
+            f"Video list filters: {', '.join(filter_log_bits)}",
+            SEVERITY_DEBUG,
+            user_id=user_id,
+        )
 
     q = f"""SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
@@ -243,11 +392,6 @@ async def list_videos_by_tags(
     return videos
 
 
-def _escape_ilike(term: str) -> str:
-    """Escape % and _ for safe use in ILIKE pattern (use ESCAPE '\\' in SQL)."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 @router.get("/search", response_model=list[VideoResponse])
 async def search_videos(
     request: Request,
@@ -294,6 +438,23 @@ async def search_videos(
         tags_by_vid = await _fetch_tags_for_videos([v.video_id for v in videos], user_id)
         videos = [v.model_copy(update={"tags": tags_by_vid.get(v.video_id, [])}) for v in videos]
     return videos
+
+
+@router.get("/filter-options", response_model=VideoFilterOptionsResponse)
+async def get_video_filter_options(request: Request):
+    """Distinct video statuses and current user's tags for Videos page filters."""
+    user_id = request.state.user_id
+    status_rows = await db.fetch(
+        "SELECT DISTINCT status FROM video WHERE status IS NOT NULL ORDER BY 1"
+    )
+    statuses = [r["status"] for r in status_rows if r["status"]]
+    tag_rows = await db.fetch(
+        "SELECT tag_id, title FROM tag WHERE user_id = $1 ORDER BY LOWER(title)",
+        user_id,
+    )
+    tags = [VideoFilterTagOption(tag_id=r["tag_id"], title=r["title"]) for r in tag_rows]
+    await log_event("Video filter options requested", SEVERITY_DEBUG, user_id=user_id)
+    return VideoFilterOptionsResponse(statuses=statuses, tags=tags)
 
 
 def _build_ffmpeg_args(full_path: str) -> list[str]:

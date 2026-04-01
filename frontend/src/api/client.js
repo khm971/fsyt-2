@@ -90,8 +90,17 @@ export const api = {
     },
     list: (params = {}) => {
       const q = new URLSearchParams();
-      if (params.channel_id != null) q.set("channel_id", params.channel_id);
-      if (params.include_ignored != null) q.set("include_ignored", params.include_ignored);
+      if (params.channel_id != null && params.channel_id !== "") q.set("channel_id", params.channel_id);
+      if (params.include_ignored === true) q.set("include_ignored", "true");
+      if (params.status != null && params.status !== "") q.set("status", params.status);
+      if (params.title_contains != null && params.title_contains !== "") q.set("title_contains", params.title_contains);
+      if (params.has_file === true || params.has_file === false) q.set("has_file", String(params.has_file));
+      if (params.has_transcode === true || params.has_transcode === false) q.set("has_transcode", String(params.has_transcode));
+      if (params.watch_finished === true || params.watch_finished === false) q.set("watch_finished", String(params.watch_finished));
+      if (params.tag_id != null && params.tag_id !== "") q.set("tag_id", params.tag_id);
+      if (params.record_created_from != null && params.record_created_from !== "") q.set("record_created_from", params.record_created_from);
+      if (params.record_created_to != null && params.record_created_to !== "") q.set("record_created_to", params.record_created_to);
+      if (params.video_id != null && params.video_id !== "") q.set("video_id", params.video_id);
       if (params.limit != null) q.set("limit", params.limit);
       if (params.offset != null) q.set("offset", params.offset);
       if (params.sort_by != null) q.set("sort_by", params.sort_by);
@@ -99,6 +108,7 @@ export const api = {
       const query = q.toString();
       return apiFetch(`/videos${query ? `?${query}` : ""}`);
     },
+    filterOptions: () => apiFetch("/videos/filter-options"),
     get: (id) => apiFetch(`/videos/${id}`),
     getTags: (videoId) => apiFetch(`/videos/${videoId}/tags`),
     addTag: (videoId, body) =>
