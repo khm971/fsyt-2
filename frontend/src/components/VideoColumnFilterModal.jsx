@@ -8,7 +8,7 @@ const OPTIONAL_COLUMNS = [
   { key: "provider_key", label: "Provider key", defaultVisible: false },
   { key: "channel", label: "Channel", defaultVisible: false },
   { key: "duration", label: "Duration", defaultVisible: false },
-  { key: "upload_date", label: "Upload date", defaultVisible: false },
+  { key: "upload_date", label: "Upload date", defaultVisible: true },
   { key: "record_created", label: "Record created", defaultVisible: false },
   { key: "download_date", label: "Download date", defaultVisible: false },
   { key: "watch_progress", label: "Watch progress", defaultVisible: false },
@@ -43,6 +43,10 @@ const EMPTY_FILTERS = {
   watch_finished: null,
   tag_id: "",
   ignored: VIDEO_IGNORED_FILTER.NOT_IGNORED,
+  upload_date_from: "",
+  upload_date_to: "",
+  download_date_from: "",
+  download_date_to: "",
   record_created_from: "",
   record_created_to: "",
   video_id: "",
@@ -278,8 +282,48 @@ export default function VideoColumnFilterModal({
                 ))}
               </select>
             </label>
-            <div className="sm:col-span-2 border-t border-gray-700 pt-3 mt-1">
-              <span className="text-gray-400 block mb-2">Date ranges</span>
+            <div className="sm:col-span-2 border-t border-gray-700 pt-3 mt-1 space-y-4">
+              <span className="text-gray-400 block mb-0">Date ranges</span>
+              <div>
+                <span className="text-xs text-gray-500 block mb-1">Upload date</span>
+                <div className="flex flex-wrap gap-2 items-center min-w-0">
+                  <input
+                    type="date"
+                    value={localFilters.upload_date_from || ""}
+                    onChange={(e) => updateFilter("upload_date_from", e.target.value || "")}
+                    className="input flex-1 min-w-[8rem]"
+                  />
+                  <span className="text-gray-500 shrink-0">to</span>
+                  <input
+                    type="date"
+                    value={localFilters.upload_date_to || ""}
+                    onChange={(e) => updateFilter("upload_date_to", e.target.value || "")}
+                    className="input flex-1 min-w-[8rem]"
+                  />
+                </div>
+              </div>
+              <div>
+                <span className="text-xs text-gray-500 block mb-1">Download date</span>
+                <div className="flex flex-wrap gap-2 items-center min-w-0">
+                  <input
+                    type="datetime-local"
+                    value={localFilters.download_date_from ? toDatetimeLocalValue(localFilters.download_date_from) : ""}
+                    onChange={(e) =>
+                      updateFilter("download_date_from", e.target.value ? new Date(e.target.value).toISOString() : "")
+                    }
+                    className="input flex-1 min-w-[8rem]"
+                  />
+                  <span className="text-gray-500 shrink-0">to</span>
+                  <input
+                    type="datetime-local"
+                    value={localFilters.download_date_to ? toDatetimeLocalValue(localFilters.download_date_to) : ""}
+                    onChange={(e) =>
+                      updateFilter("download_date_to", e.target.value ? new Date(e.target.value).toISOString() : "")
+                    }
+                    className="input flex-1 min-w-[8rem]"
+                  />
+                </div>
+              </div>
               <div>
                 <span className="text-xs text-gray-500 block mb-1">Record created</span>
                 <div className="flex flex-wrap gap-2 items-center min-w-0">

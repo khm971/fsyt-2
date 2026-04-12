@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../api/client";
-import { cn, formatDateTime, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
+import { cn, formatDateOnly, formatDateTime, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
 import { shouldSkipIgnoreVideoConfirm, setSkipIgnoreVideoConfirm } from "../lib/ignoreVideoConfirm";
 import {
   Hash,
@@ -355,7 +355,7 @@ export function VideoDetailsModal({
                           Upload date
                         </span>
                       </td>
-                      <td className="py-1.5 text-white">{video.upload_date ? formatDateTime(video.upload_date) : "—"}</td>
+                      <td className="py-1.5 text-white">{video.upload_date ? formatDateOnly(video.upload_date) : "—"}</td>
                     </tr>
                     <tr>
                       <td className="py-1.5 pr-4 text-gray-400 align-top">

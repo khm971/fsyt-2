@@ -62,7 +62,10 @@ export default function JobScheduler({ setError }) {
   useEffect(() => {
     if (showForm || historyEntryId) {
       api.channels.list().then(setChannels).catch(() => setChannels([]));
-      api.videos.list({ limit: 500 }).then(setVideos).catch(() => setVideos([]));
+      api.videos
+        .list({ limit: 500 })
+        .then((data) => setVideos(Array.isArray(data?.videos) ? data.videos : []))
+        .catch(() => setVideos([]));
     }
   }, [showForm, historyEntryId]);
 

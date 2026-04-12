@@ -5,7 +5,7 @@ import os
 import re
 import shlex
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -108,10 +108,17 @@ async def list_videos(
     tag_id: int | None = Query(None),
     record_created_from: datetime | None = Query(None),
     record_created_to: datetime | None = Query(None),
+    upload_date_from: date | None = Query(None),
+    upload_date_to: date | None = Query(None),
+    download_date_from: datetime | None = Query(None),
+    download_date_to: datetime | None = Query(None),
     video_id: int | None = Query(None),
     limit: int = Query(200, le=500),
     offset: int = Query(0, ge=0),
-    sort_by: str = Query("id", pattern="^(id|title|status)$"),
+    sort_by: str = Query(
+        "upload_date",
+        pattern="^(id|title|status|upload_date|record_created|download_date)$",
+    ),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
     user_id = request.state.user_id
@@ -158,6 +165,22 @@ async def list_videos(
     if record_created_to is not None:
         count_where_parts.append(f"v.record_created <= ${ci}")
         count_params.append(record_created_to)
+        ci += 1
+    if upload_date_from is not None:
+        count_where_parts.append(f"v.upload_date::date >= ${ci}")
+        count_params.append(upload_date_from)
+        ci += 1
+    if upload_date_to is not None:
+        count_where_parts.append(f"v.upload_date::date <= ${ci}")
+        count_params.append(upload_date_to)
+        ci += 1
+    if download_date_from is not None:
+        count_where_parts.append(f"v.download_date >= ${ci}")
+        count_params.append(download_date_from)
+        ci += 1
+    if download_date_to is not None:
+        count_where_parts.append(f"v.download_date <= ${ci}")
+        count_params.append(download_date_to)
         ci += 1
     if tag_id is not None:
         count_where_parts.append(
@@ -224,6 +247,22 @@ async def list_videos(
         main_where_parts.append(f"v.record_created <= ${i}")
         params.append(record_created_to)
         i += 1
+    if upload_date_from is not None:
+        main_where_parts.append(f"v.upload_date::date >= ${i}")
+        params.append(upload_date_from)
+        i += 1
+    if upload_date_to is not None:
+        main_where_parts.append(f"v.upload_date::date <= ${i}")
+        params.append(upload_date_to)
+        i += 1
+    if download_date_from is not None:
+        main_where_parts.append(f"v.download_date >= ${i}")
+        params.append(download_date_from)
+        i += 1
+    if download_date_to is not None:
+        main_where_parts.append(f"v.download_date <= ${i}")
+        params.append(download_date_to)
+        i += 1
     if tag_id is not None:
         main_where_parts.append(
             f"EXISTS (SELECT 1 FROM video_tag vt WHERE vt.video_id = v.video_id AND vt.tag_id = ${i})"
@@ -258,6 +297,14 @@ async def list_videos(
         filter_log_bits.append("record_created_from=…")
     if record_created_to is not None:
         filter_log_bits.append("record_created_to=…")
+    if upload_date_from is not None:
+        filter_log_bits.append("upload_date_from=…")
+    if upload_date_to is not None:
+        filter_log_bits.append("upload_date_to=…")
+    if download_date_from is not None:
+        filter_log_bits.append("download_date_from=…")
+    if download_date_to is not None:
+        filter_log_bits.append("download_date_to=…")
     if video_id is not None:
         filter_log_bits.append(f"video_id={video_id}")
     if filter_log_bits:
@@ -283,7 +330,14 @@ async def list_videos(
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
            WHERE {main_where_sql}"""
-    col = {"id": "v.video_id", "title": "v.title", "status": "v.status"}[sort_by]
+    col = {
+        "id": "v.video_id",
+        "title": "v.title",
+        "status": "v.status",
+        "upload_date": "v.upload_date",
+        "record_created": "v.record_created",
+        "download_date": "v.download_date",
+    }[sort_by]
     dirn = "ASC" if sort_order == "asc" else "DESC"
     q += f" ORDER BY {col} {dirn} LIMIT ${i} OFFSET ${i + 1}"
     params.append(limit)

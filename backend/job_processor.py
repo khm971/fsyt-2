@@ -24,6 +24,7 @@ from services.ytdlp_service import get_video_info, get_channel_videos
 from services.channel_info_service import get_channel_info_by_yt_channel_id, get_channel_info_by_name
 from services.channel_art_service import download_channel_artwork
 from services.llm_service import generate_llm_video_description
+from services.nfo_service import write_sidecar_nfo_for_library_video
 from services.tools import get_media_root, sanitize_string_for_disk_path
 from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
 
@@ -271,6 +272,10 @@ async def run_job_loop() -> None:
                             success = True
                             message = f"No jobs to trim (older than {age_days} days)"
 
+                elif job_type == "generate_missing_llm_descriptions":
+                    message = await _run_generate_missing_llm_descriptions(job_id=job_id, user_id=job_user_id)
+                    success = True
+
                 else:
                     success, message, is_error = False, f"Unknown job type: {job_type}", True
             except Exception as e:
@@ -381,6 +386,84 @@ async def _run_get_metadata(video_id: int, job_id: int | None = None, channel_id
     if job_id is not None:
         await db_helpers.update_job_status(job_id, "metadata_available", None, 0)
     return None
+
+
+async def _run_generate_missing_llm_descriptions(job_id: int | None = None, user_id: int | None = None) -> str:
+    """Generate LLM plot summaries for videos where description = llm_description_1; update DB and sidecar NFO when on disk."""
+    rows = await db.fetch(
+        """SELECT v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description, v.file_path,
+                  COALESCE(c.title, c.handle, 'Unknown') AS channel_title
+           FROM video v
+           LEFT JOIN channel c ON c.channel_id = v.channel_id
+           WHERE v.description = v.llm_description_1"""
+    )
+    if not rows:
+        return "No videos with missing LLM descriptions (description = llm_description_1)"
+    await log_event(
+        f"Job {job_id or '?'}: generate_missing_llm_descriptions for {len(rows)} video(s)",
+        SEVERITY_INFO,
+        job_id=job_id,
+        user_id=user_id,
+    )
+    target_llm = (await db_helpers.get_control_value("server_target_llm")) or "ollama"
+    sleep_s = await db_helpers.get_control_int("sleep_fill_missing_meta", 5)
+    n_ok = 0
+    n_nfo = 0
+    n_total = len(rows)
+    for i, r in enumerate(rows):
+        video_id = r["video_id"]
+        desc = (r["description"] or "").strip()
+        if job_id is not None and n_total > 0:
+            # Percent 1–99 while running so Queue / Dashboard show the progress bar (same rule as downloads).
+            pct = max(1, min(99, int(100 * i / n_total)))
+            await db_helpers.update_job_status(
+                job_id,
+                "running",
+                f"Missing LLM descriptions {i + 1}/{n_total} (video_id={video_id})",
+                pct,
+            )
+            await broadcast_queue_update(updated_job_id=job_id)
+        await log_event(
+            f"Job {job_id or '?'}: missing LLM descriptions {i + 1}/{len(rows)} (video_id={video_id})",
+            SEVERITY_DEBUG,
+            job_id=job_id,
+            video_id=video_id,
+            channel_id=r.get("channel_id"),
+            user_id=user_id,
+        )
+        llm_desc = await asyncio.to_thread(generate_llm_video_description, desc, target_llm)
+        await db_helpers.update_video_llm_description(video_id, llm_desc)
+        n_ok += 1
+        fp = r.get("file_path")
+        if fp and str(fp).strip():
+            wrote = await asyncio.to_thread(
+                write_sidecar_nfo_for_library_video,
+                file_path_rel=str(fp).strip(),
+                provider_key=r["provider_key"] or "",
+                title=r["title"] or "Unknown",
+                channel_title=r["channel_title"] or "Unknown",
+                upload_date=r["upload_date"],
+                plot=llm_desc or desc,
+                video_id=video_id,
+                job_id=job_id,
+                channel_id=r.get("channel_id"),
+            )
+            if wrote:
+                await db.execute("UPDATE video SET nfo_last_written = NOW() WHERE video_id = $1", video_id)
+                n_nfo += 1
+        await broadcast_video_updated(video_id)
+        if job_id is not None and n_total > 0:
+            pct_done = min(99, int(100 * (i + 1) / n_total))
+            await db_helpers.update_job_status(
+                job_id,
+                "running",
+                f"Missing LLM descriptions done {i + 1}/{n_total} (video_id={video_id})",
+                pct_done,
+            )
+            await broadcast_queue_update(updated_job_id=job_id)
+        if sleep_s > 0 and i < len(rows) - 1:
+            await asyncio.sleep(sleep_s)
+    return f"Generated missing LLM descriptions for {n_ok} video(s); updated {n_nfo} NFO file(s)"
 
 
 async def _run_fill_missing_metadata(max_videos: int, job_id: int | None = None, user_id: int | None = None) -> None:

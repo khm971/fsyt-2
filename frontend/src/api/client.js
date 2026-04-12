@@ -103,6 +103,10 @@ export const api = {
       if (params.has_transcode === true || params.has_transcode === false) q.set("has_transcode", String(params.has_transcode));
       if (params.watch_finished === true || params.watch_finished === false) q.set("watch_finished", String(params.watch_finished));
       if (params.tag_id != null && params.tag_id !== "") q.set("tag_id", params.tag_id);
+      if (params.upload_date_from != null && params.upload_date_from !== "") q.set("upload_date_from", params.upload_date_from);
+      if (params.upload_date_to != null && params.upload_date_to !== "") q.set("upload_date_to", params.upload_date_to);
+      if (params.download_date_from != null && params.download_date_from !== "") q.set("download_date_from", params.download_date_from);
+      if (params.download_date_to != null && params.download_date_to !== "") q.set("download_date_to", params.download_date_to);
       if (params.record_created_from != null && params.record_created_from !== "") q.set("record_created_from", params.record_created_from);
       if (params.record_created_to != null && params.record_created_to !== "") q.set("record_created_to", params.record_created_to);
       if (params.video_id != null && params.video_id !== "") q.set("video_id", params.video_id);
@@ -209,6 +213,10 @@ export const api = {
       apiFetch("/maintenance/cancel-pending-future-jobs", { method: "POST" }),
     clearTranscodes: () => apiFetch("/maintenance/clear-transcodes", { method: "POST" }),
     clearWatchHistory: () => apiFetch("/maintenance/clear-watch-history", { method: "POST" }),
+    getGenerateMissingLlmDescriptionsPreview: () =>
+      apiFetch("/maintenance/generate-missing-llm-descriptions/preview"),
+    generateMissingLlmDescriptions: () =>
+      apiFetch("/maintenance/generate-missing-llm-descriptions", { method: "POST" }),
   },
 
   chargedErrors: {

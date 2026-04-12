@@ -5,6 +5,18 @@ export function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
 
+/** Calendar date only (e.g. "Mar 30, 2026"). */
+export function formatDateOnly(isoString) {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 /** Full date/time (e.g. "Mar 5, 2025, 3:45 PM"). */
 export function formatDateTime(isoString) {
   if (!isoString) return "—";

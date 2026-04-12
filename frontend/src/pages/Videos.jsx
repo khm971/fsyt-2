@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { cn, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
+import { cn, formatDateOnly, formatDateTimeWithSeconds, formatDurationSeconds } from "../lib/utils";
 import { shouldSkipIgnoreVideoConfirm, setSkipIgnoreVideoConfirm } from "../lib/ignoreVideoConfirm";
 import { shouldSkipClearVideoStatusConfirm, setSkipClearVideoStatusConfirm } from "../lib/clearVideoStatusConfirm";
 import {
@@ -82,6 +82,10 @@ function filtersToParams(filters) {
   if (filters.has_transcode === true || filters.has_transcode === false) p.has_transcode = filters.has_transcode;
   if (filters.watch_finished === true || filters.watch_finished === false) p.watch_finished = filters.watch_finished;
   if (filters.tag_id) p.tag_id = parseInt(String(filters.tag_id), 10);
+  if (filters.upload_date_from) p.upload_date_from = filters.upload_date_from;
+  if (filters.upload_date_to) p.upload_date_to = filters.upload_date_to;
+  if (filters.download_date_from) p.download_date_from = filters.download_date_from;
+  if (filters.download_date_to) p.download_date_to = filters.download_date_to;
   if (filters.record_created_from) p.record_created_from = filters.record_created_from;
   if (filters.record_created_to) p.record_created_to = filters.record_created_to;
   if (filters.video_id !== "" && filters.video_id != null) p.video_id = parseInt(String(filters.video_id), 10);
@@ -98,6 +102,10 @@ function hasActiveFilters(filters) {
     filters.watch_finished !== null ||
     filters.tag_id ||
     (filters.ignored && filters.ignored !== VIDEO_IGNORED_FILTER.NOT_IGNORED) ||
+    filters.upload_date_from ||
+    filters.upload_date_to ||
+    filters.download_date_from ||
+    filters.download_date_to ||
     filters.record_created_from ||
     filters.record_created_to ||
     (filters.video_id !== "" && filters.video_id != null)
@@ -233,7 +241,7 @@ export default function Videos({ setError }) {
     if (ch) return { ...base, channel_id: ch };
     return base;
   });
-  const [sortBy, setSortBy] = useState("id");
+  const [sortBy, setSortBy] = useState("upload_date");
   const [sortOrder, setSortOrder] = useState("desc");
   const [page, setPage] = useState(1);
   const [totalVideos, setTotalVideos] = useState(0);
@@ -511,13 +519,61 @@ export default function Videos({ setError }) {
                 <th className="px-4 py-3 font-medium">Duration</th>
               )}
               {visibleColumns.includes("upload_date") && (
-                <th className="px-4 py-3 font-medium">Upload date</th>
+                <th className="px-4 py-3 font-medium">
+                  <div className="flex items-center gap-1">
+                    Upload date
+                    <Tooltip title={sortBy === "upload_date" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by upload date"}>
+                      <button
+                        type="button"
+                        onClick={() => { setPage(1); if (sortBy === "upload_date") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("upload_date"); setSortOrder("desc"); } }}
+                        className={cn(
+                          "p-0.5 rounded hover:bg-gray-700",
+                          sortBy === "upload_date" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
+                        )}
+                      >
+                        {sortBy === "upload_date" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                      </button>
+                    </Tooltip>
+                  </div>
+                </th>
               )}
               {visibleColumns.includes("record_created") && (
-                <th className="px-4 py-3 font-medium">Record created</th>
+                <th className="px-4 py-3 font-medium">
+                  <div className="flex items-center gap-1">
+                    Record created
+                    <Tooltip title={sortBy === "record_created" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by record created"}>
+                      <button
+                        type="button"
+                        onClick={() => { setPage(1); if (sortBy === "record_created") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("record_created"); setSortOrder("desc"); } }}
+                        className={cn(
+                          "p-0.5 rounded hover:bg-gray-700",
+                          sortBy === "record_created" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
+                        )}
+                      >
+                        {sortBy === "record_created" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                      </button>
+                    </Tooltip>
+                  </div>
+                </th>
               )}
               {visibleColumns.includes("download_date") && (
-                <th className="px-4 py-3 font-medium">Download date</th>
+                <th className="px-4 py-3 font-medium">
+                  <div className="flex items-center gap-1">
+                    Download date
+                    <Tooltip title={sortBy === "download_date" ? (sortOrder === "asc" ? "Sort ascending (click to toggle)" : "Sort descending (click to toggle)") : "Sort by download date"}>
+                      <button
+                        type="button"
+                        onClick={() => { setPage(1); if (sortBy === "download_date") setSortOrder((o) => (o === "asc" ? "desc" : "asc")); else { setSortBy("download_date"); setSortOrder("desc"); } }}
+                        className={cn(
+                          "p-0.5 rounded hover:bg-gray-700",
+                          sortBy === "download_date" ? "text-blue-400" : "text-gray-500 hover:text-gray-400"
+                        )}
+                      >
+                        {sortBy === "download_date" ? (sortOrder === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />) : <ArrowUpDown className="w-3 h-3" />}
+                      </button>
+                    </Tooltip>
+                  </div>
+                </th>
               )}
               {visibleColumns.includes("watch_progress") && (
                 <th className="px-4 py-3 font-medium">Watch</th>
@@ -624,7 +680,7 @@ export default function Videos({ setError }) {
                 )}
                 {visibleColumns.includes("upload_date") && (
                   <td className="px-4 py-2 text-gray-400 text-xs whitespace-nowrap">
-                    {v.upload_date ? formatDateTimeWithSeconds(v.upload_date) : "—"}
+                    {v.upload_date ? formatDateOnly(v.upload_date) : "—"}
                   </td>
                 )}
                 {visibleColumns.includes("record_created") && (

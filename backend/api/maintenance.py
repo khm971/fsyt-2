@@ -84,3 +84,49 @@ async def cancel_pending_future_jobs(request: Request):
             user_id=user_id,
         )
         raise HTTPException(500, "Failed to cancel pending future jobs") from exc
+
+
+@router.get("/generate-missing-llm-descriptions/preview")
+async def generate_missing_llm_descriptions_preview():
+    """Count videos where description equals llm_description_1 (treated as missing a real LLM plot summary)."""
+    row = await db.fetchrow(
+        "SELECT COUNT(*) AS count FROM video WHERE description = llm_description_1"
+    )
+    return {"count": int(row["count"] or 0)}
+
+
+@router.post("/generate-missing-llm-descriptions")
+async def generate_missing_llm_descriptions(request: Request):
+    """Queue a job to generate LLM plot summaries for videos where description = llm_description_1."""
+    user_id = getattr(request.state, "user_id", None)
+    try:
+        row = await db.fetchrow(
+            "SELECT COUNT(*) AS count FROM video WHERE description = llm_description_1"
+        )
+        n = int(row["count"] or 0)
+        if n == 0:
+            raise HTTPException(400, "No videos match description = llm_description_1")
+        job_row = await db.fetchrow(
+            """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id)
+               VALUES ('generate_missing_llm_descriptions', NULL, NULL, NULL, 'new', 50, $1)
+               RETURNING job_queue_id""",
+            user_id,
+        )
+        job_queue_id = int(job_row["job_queue_id"])
+        await broadcast_queue_update()
+        await log_event(
+            f"Maintenance: queued generate missing LLM descriptions for {n} video(s) (job_queue_id={job_queue_id})",
+            SEVERITY_INFO,
+            job_id=job_queue_id,
+            user_id=user_id,
+        )
+        return {"video_count": n, "job_queue_id": job_queue_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        await log_event(
+            f"Maintenance: failed to queue generate missing LLM descriptions: {type(exc).__name__}: {exc}",
+            SEVERITY_ERROR,
+            user_id=user_id,
+        )
+        raise HTTPException(500, "Failed to queue generate missing LLM descriptions") from exc

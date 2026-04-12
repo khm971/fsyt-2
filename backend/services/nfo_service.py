@@ -1,4 +1,5 @@
 """Sync NFO file creation for Jellyfin."""
+import os
 from xml.etree import ElementTree as ET
 from datetime import datetime
 
@@ -38,3 +39,55 @@ def create_video_nfo_2(output_path: str, youtube_video_id: str, youtube_title: s
             sync_db.log_event_sync(err_msg, sync_db.SEVERITY_ERROR, job_id=job_id, video_id=video_id, channel_id=channel_id)
         print(f"Error creating NFO: {e}")
         return False
+
+
+def _upload_date_yyyymmdd(upload_date) -> str:
+    if upload_date is None:
+        return "20000101"
+    if hasattr(upload_date, "strftime"):
+        return upload_date.strftime("%Y%m%d")
+    s = str(upload_date).strip()
+    if len(s) >= 8 and s[:8].isdigit():
+        return s[:8]
+    return "20000101"
+
+
+def write_sidecar_nfo_for_library_video(
+    *,
+    file_path_rel: str,
+    provider_key: str,
+    title: str,
+    channel_title: str,
+    upload_date,
+    plot: str,
+    video_id: int | None = None,
+    job_id: int | None = None,
+    channel_id: int | None = None,
+) -> bool:
+    """Write `<basename>.nfo` beside the file under MEDIA_ROOT. False if path invalid, outside media root, or video file missing."""
+    from services.tools import get_media_root
+
+    rel = (file_path_rel or "").strip()
+    if not rel:
+        return False
+    root = get_media_root()
+    root_abs = os.path.abspath(root.rstrip("/\\"))
+    full_video = os.path.abspath(os.path.join(root, rel.replace("\\", "/")))
+    if full_video != root_abs and not full_video.startswith(root_abs + os.sep):
+        return False
+    if not os.path.isfile(full_video):
+        return False
+    base, _ = os.path.splitext(full_video)
+    nfo_path = base + ".nfo"
+    ud = _upload_date_yyyymmdd(upload_date)
+    return create_video_nfo_2(
+        nfo_path,
+        provider_key or "",
+        title or "Unknown",
+        channel_title or "Unknown",
+        ud,
+        plot or "",
+        video_id=video_id,
+        job_id=job_id,
+        channel_id=channel_id,
+    )
