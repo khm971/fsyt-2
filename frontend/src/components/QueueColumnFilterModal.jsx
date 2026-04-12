@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
+import { serverInstanceSelectLabel } from "../lib/serverInstances";
 import Modal from "./Modal";
 
 const OPTIONAL_COLUMNS = [
@@ -32,6 +33,7 @@ const EMPTY_FILTERS = {
   last_update_to: "",
   run_after_from: "",
   run_after_to: "",
+  target_server_instance_id: "",
 };
 
 const BOOL_OPTIONS = [
@@ -56,6 +58,7 @@ export default function QueueColumnFilterModal({
   onClose,
 }) {
   const [filterOptions, setFilterOptions] = useState({ statuses: [], job_types: [] });
+  const [serverInstances, setServerInstances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [localColumns, setLocalColumns] = useState(() => [...visibleColumns]);
   const [localFilters, setLocalFilters] = useState(() => ({ ...filters }));
@@ -67,10 +70,14 @@ export default function QueueColumnFilterModal({
 
   useEffect(() => {
     setLoading(true);
-    api.queue
-      .filterOptions()
-      .then(setFilterOptions)
-      .catch(() => setFilterOptions({ statuses: [], job_types: [] }))
+    Promise.all([
+      api.queue.filterOptions().catch(() => ({ statuses: [], job_types: [] })),
+      api.serverInstances.list().catch(() => []),
+    ])
+      .then(([opts, instances]) => {
+        setFilterOptions(opts);
+        setServerInstances(Array.isArray(instances) ? instances : []);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -189,6 +196,21 @@ export default function QueueColumnFilterModal({
                 className="input w-full"
                 placeholder="Any"
               />
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="text-gray-400 block mb-1">Target server instance</span>
+              <select
+                value={localFilters.target_server_instance_id === "" ? "" : String(localFilters.target_server_instance_id)}
+                onChange={(e) => updateFilter("target_server_instance_id", e.target.value)}
+                className="input w-full"
+              >
+                <option value="">— Any —</option>
+                {serverInstances.map((s) => (
+                  <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                    {serverInstanceSelectLabel(s)}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block">
               <span className="text-gray-400 block mb-1">Scheduled to run in the future</span>

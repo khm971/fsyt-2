@@ -41,6 +41,10 @@ function filtersToParams(filters) {
   if (filters.last_update_to) p.last_update_to = filters.last_update_to;
   if (filters.run_after_from) p.run_after_from = filters.run_after_from;
   if (filters.run_after_to) p.run_after_to = filters.run_after_to;
+  if (filters.target_server_instance_id !== "" && filters.target_server_instance_id != null) {
+    const tid = parseInt(String(filters.target_server_instance_id), 10);
+    if (Number.isFinite(tid) && tid >= 1) p.target_server_instance_id = tid;
+  }
   return p;
 }
 
@@ -59,7 +63,8 @@ function hasActiveFilters(filters) {
     filters.last_update_from ||
     filters.last_update_to ||
     filters.run_after_from ||
-    filters.run_after_to
+    filters.run_after_to ||
+    (filters.target_server_instance_id !== "" && filters.target_server_instance_id != null)
   );
 }
 
@@ -85,14 +90,29 @@ function loadStoredFilters() {
   return { ...EMPTY_FILTERS };
 }
 
-/** Dashboard links use ?filter=…; apply on first paint so the list request matches the banner (avoids effect-order race). */
-function filtersFromDashboardFilterParam(searchParams) {
+/**
+ * Dashboard / deep links: ?filter=… and/or ?target_server_instance_id=…
+ * Apply on first paint so the list request matches the link (avoids effect-order race).
+ */
+function queueUrlFilters(searchParams) {
+  const tidRaw = searchParams.get("target_server_instance_id");
+  let targetPart = null;
+  if (tidRaw != null && tidRaw !== "") {
+    const n = parseInt(tidRaw, 10);
+    if (Number.isFinite(n) && n >= 1) targetPart = String(n);
+  }
   const filter = searchParams.get("filter");
-  if (filter === "scheduled") return { ...EMPTY_FILTERS, scheduled_future: true };
-  if (filter === "queued") return { ...EMPTY_FILTERS, scheduled_future: false, status: "new" };
-  if (filter === "warnings") return { ...EMPTY_FILTERS, has_warning: true, acknowledged: false };
-  if (filter === "errors") return { ...EMPTY_FILTERS, has_error: true, acknowledged: false };
-  return null;
+  let base = null;
+  if (filter === "scheduled") base = { ...EMPTY_FILTERS, scheduled_future: true };
+  else if (filter === "queued") base = { ...EMPTY_FILTERS, scheduled_future: false, status: "new" };
+  else if (filter === "warnings") base = { ...EMPTY_FILTERS, has_warning: true, acknowledged: false };
+  else if (filter === "errors") base = { ...EMPTY_FILTERS, has_error: true, acknowledged: false };
+  if (targetPart != null) {
+    base = base
+      ? { ...base, target_server_instance_id: targetPart }
+      : { ...EMPTY_FILTERS, target_server_instance_id: targetPart };
+  }
+  return base;
 }
 
 /** Remove error/warning/ack filters so bulk-ack can apply its own on top of channel, dates, status, etc. */
@@ -144,7 +164,7 @@ export default function Queue({ setError }) {
   const [showColumnFilterModal, setShowColumnFilterModal] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState(loadStoredColumns);
   const [filters, setFilters] = useState(() => {
-    const fromUrl = filtersFromDashboardFilterParam(searchParams);
+    const fromUrl = queueUrlFilters(searchParams);
     return fromUrl != null ? fromUrl : loadStoredFilters();
   });
   const [listTotal, setListTotal] = useState(0);
@@ -162,7 +182,7 @@ export default function Queue({ setError }) {
   const totalPages = Math.max(1, Math.ceil(effectiveTotal / PAGE_SIZE));
 
   useEffect(() => {
-    const next = filtersFromDashboardFilterParam(searchParams);
+    const next = queueUrlFilters(searchParams);
     if (!next) return;
     setFilters((prev) => {
       const sameApiParams =

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api/client";
+import { serverInstanceSelectLabel } from "../lib/serverInstances";
 import Modal from "./Modal";
 
 const OPTIONAL_COLUMNS = [
@@ -55,6 +56,7 @@ export default function LogColumnFilterModal({
   onClose,
 }) {
   const [subsystems, setSubsystems] = useState([]);
+  const [serverInstances, setServerInstances] = useState([]);
   const [localColumns, setLocalColumns] = useState(() => [...visibleColumns]);
   const [localFilters, setLocalFilters] = useState(() => ({ ...filters }));
 
@@ -68,6 +70,10 @@ export default function LogColumnFilterModal({
       .filterOptions()
       .then((d) => setSubsystems(d.subsystems || []))
       .catch(() => setSubsystems([]));
+    api.serverInstances
+      .list()
+      .then((rows) => setServerInstances(Array.isArray(rows) ? rows : []))
+      .catch(() => setServerInstances([]));
   }, []);
 
   const handleApply = () => {
@@ -187,16 +193,20 @@ export default function LogColumnFilterModal({
                 placeholder="Any"
               />
             </label>
-            <label className="block">
-              <span className="text-gray-400 block mb-1">Server instance ID</span>
-              <input
-                type="number"
-                min={1}
-                value={localFilters.server_instance_id}
+            <label className="block sm:col-span-2">
+              <span className="text-gray-400 block mb-1">Server instance</span>
+              <select
+                value={localFilters.server_instance_id === "" ? "" : String(localFilters.server_instance_id)}
                 onChange={(e) => updateFilter("server_instance_id", e.target.value)}
                 className="input w-full min-w-0"
-                placeholder="Any"
-              />
+              >
+                <option value="">— Any —</option>
+                {serverInstances.map((s) => (
+                  <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                    {serverInstanceSelectLabel(s)}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block">
               <span className="text-gray-400 block mb-1">Acknowledged</span>

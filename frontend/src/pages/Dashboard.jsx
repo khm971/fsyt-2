@@ -12,6 +12,19 @@ import { ChannelEditModal } from "../components/ChannelEditModal";
 import { LogEntryDetailsModal } from "../components/LogEntryDetailsModal";
 import { AddVideoModal } from "../components/AddVideoModal";
 
+function serverInstanceHeartbeatDotTitle(inst, now) {
+  if (inst.last_heartbeat_utc) {
+    const abs = formatDateTimeWithSeconds(inst.last_heartbeat_utc);
+    const rel = formatRelativeTime(inst.last_heartbeat_utc, now);
+    return `Last heartbeat: ${abs} (${rel}). ${
+      inst.is_running
+        ? "Green: last check-in within the last 10 minutes."
+        : "Gray: last check-in was more than 10 minutes ago."
+    }`;
+  }
+  return "No heartbeat recorded for this instance yet.";
+}
+
 const SEVERITY_COLORS = {
   5: "text-gray-500",
   10: "text-gray-400",
@@ -447,9 +460,15 @@ export default function Dashboard({ setError }) {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             {instancesSummary.map((inst) => (
-              <div
+              <Link
                 key={inst.server_instance_id}
-                className="rounded-lg border border-gray-800 bg-gray-950/50 p-3 text-sm space-y-1.5"
+                to={`/queue?target_server_instance_id=${inst.server_instance_id}`}
+                className={cn(
+                  "rounded-lg border border-gray-800 bg-gray-950/50 p-3 text-sm space-y-1.5 block text-left",
+                  "hover:border-gray-600 hover:bg-gray-900/60 transition-colors cursor-pointer",
+                  "focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60"
+                )}
+                title="Open job queue filtered to this instance"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-white font-medium truncate" title={inst.display_name}>
@@ -460,7 +479,7 @@ export default function Dashboard({ setError }) {
                       "shrink-0 w-2 h-2 rounded-full",
                       inst.is_running ? "bg-green-500" : "bg-gray-600"
                     )}
-                    title={inst.is_running ? "Heartbeat within 10 min" : "No recent heartbeat"}
+                    title={serverInstanceHeartbeatDotTitle(inst, now)}
                   />
                 </div>
                 <div className="text-gray-500 text-xs font-mono">ID {inst.server_instance_id}</div>
@@ -492,7 +511,7 @@ export default function Dashboard({ setError }) {
                     <span className="text-yellow-400">Paused</span>
                   )}
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -520,7 +539,7 @@ export default function Dashboard({ setError }) {
                 tabIndex={0}
                 onClick={() => setEventLogIdForModal(e.event_log_id)}
                 onKeyDown={(ev) => ev.key === "Enter" && setEventLogIdForModal(e.event_log_id)}
-                title={`Severity: ${e.severity}, Job ID: ${e.job_id ?? "—"}, Video ID: ${e.video_id ?? "—"}, Channel ID: ${e.channel_id ?? "—"}`}
+                title={`Severity: ${e.severity}, Instance: ${e.server_instance_id ?? "—"}, Job ID: ${e.job_id ?? "—"}, Video ID: ${e.video_id ?? "—"}, Channel ID: ${e.channel_id ?? "—"}`}
                 className={cn(
                   "flex gap-2 truncate items-center cursor-pointer rounded px-1 -mx-1 hover:bg-gray-800/50",
                   e.message === "Application starting, database connected"
@@ -530,6 +549,12 @@ export default function Dashboard({ setError }) {
               >
                 <span className="text-gray-500 shrink-0">
                   {formatSmartTime(e.event_time)}
+                </span>
+                <span
+                  className="shrink-0 rounded border border-gray-700/80 bg-gray-800/50 px-1.5 py-px text-[10px] leading-tight font-mono text-gray-400 tabular-nums"
+                  title={e.server_instance_id != null ? `Server instance ${e.server_instance_id}` : "No server instance on record (older entry)"}
+                >
+                  {e.server_instance_id != null ? `[${e.server_instance_id}]` : "—"}
                 </span>
                 <span className="truncate flex-1 min-w-0">{e.message}</span>
                 {e.acknowledged ? (

@@ -5,7 +5,7 @@ import {
   Plus, Download, FileSearch, Film, ListTodo, Settings, Play, Clock, CheckCircle,
   XCircle, AlertCircle, AlertTriangle, HelpCircle, CalendarClock, MessageCircle,
   Hash, Users, User, Calendar, RefreshCw, Activity, ArrowUp, FileText, Braces, ClipboardList,
-  Check, Undo2,
+  Check, Undo2, Server,
 } from "lucide-react";
 import { Tooltip } from "./Tooltip";
 import Modal from "./Modal";
@@ -208,12 +208,40 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
                   </td>
                 </tr>
                 <tr>
-                  <td className="py-1.5 pr-4 text-gray-400 align-top">Target instance</td>
-                  <td className="py-1.5 text-white font-mono">
-                    {jobDetails.target_server_instance_id ?? 1}
-                    {jobDetails.queue_all_target_all_downloaders ? (
-                      <span className="text-cyan-400 ml-2 text-xs">(target all downloaders)</span>
-                    ) : null}
+                  <td className="py-1.5 pr-4 text-gray-400 align-top">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Server className="w-4 h-4 shrink-0 text-gray-500" />
+                      Target instance
+                    </span>
+                  </td>
+                  <td className="py-1.5 text-white">
+                    {(() => {
+                      const tid = jobDetails.target_server_instance_id ?? 1;
+                      const tname = (jobDetails.target_server_instance_name || "").trim();
+                      const label = tname ? `${tname} (ID ${tid})` : `ID ${tid}`;
+                      if (jobDetails.queue_all_target_all_downloaders) {
+                        return (
+                          <div className="space-y-1">
+                            <span className="text-cyan-400 text-sm">Target all downloaders (fan-out)</span>
+                            <div className="text-xs text-gray-400">
+                              Job owner / base instance: <span className="text-gray-300">{label}</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <span>
+                          {tname ? (
+                            <>
+                              <span className="text-white">{tname}</span>
+                              <span className="text-gray-400 font-mono text-sm ml-2">(ID {tid})</span>
+                            </>
+                          ) : (
+                            <span className="font-mono text-sm text-gray-300">ID {tid}</span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </td>
                 </tr>
                 <tr>

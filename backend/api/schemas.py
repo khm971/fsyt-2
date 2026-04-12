@@ -122,6 +122,9 @@ class VideoResponse(VideoBase):
     watch_is_finished: Optional[bool] = None
     pending_job_id: Optional[int] = None
     pending_job_type: Optional[str] = None
+    pending_job_status: Optional[str] = None
+    pending_job_target_server_instance_id: Optional[int] = None
+    pending_job_target_instance_name: Optional[str] = None
     tags: Optional[list[TagResponse]] = None
     created_by_user_id: Optional[int] = None
     created_by_username: Optional[str] = None
@@ -193,6 +196,7 @@ class JobQueueResponse(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
     target_server_instance_id: int = 1
+    target_server_instance_name: Optional[str] = None
     queue_all_target_all_downloaders: bool = False
 
     class Config:

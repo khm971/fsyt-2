@@ -167,6 +167,9 @@ export const api = {
       if (queryParams.last_update_to) q.set("last_update_to", queryParams.last_update_to);
       if (queryParams.run_after_from) q.set("run_after_from", queryParams.run_after_from);
       if (queryParams.run_after_to) q.set("run_after_to", queryParams.run_after_to);
+      if (queryParams.target_server_instance_id != null && queryParams.target_server_instance_id !== "") {
+        q.set("target_server_instance_id", String(queryParams.target_server_instance_id));
+      }
       if (queryParams.limit != null) q.set("limit", queryParams.limit);
       if (queryParams.offset != null) q.set("offset", queryParams.offset);
       if (queryParams.sort_by != null) q.set("sort_by", queryParams.sort_by);

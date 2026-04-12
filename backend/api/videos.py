@@ -86,6 +86,9 @@ def row_to_video(r) -> VideoResponse:
         watch_is_finished=r.get("watch_is_finished"),
         pending_job_id=r.get("pending_job_id"),
         pending_job_type=r.get("pending_job_type"),
+        pending_job_status=r.get("pending_job_status"),
+        pending_job_target_server_instance_id=r.get("pending_job_target_server_instance_id"),
+        pending_job_target_instance_name=r.get("pending_job_target_instance_name"),
         created_by_user_id=r.get("created_by_user_id"),
         created_by_username=r.get("created_by_username"),
     )
@@ -318,6 +321,7 @@ async def list_videos(
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   v.created_by_user_id, u.username AS created_by_username
@@ -325,7 +329,11 @@ async def list_videos(
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
            LEFT JOIN app_user u ON v.created_by_user_id = u.user_id
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -358,13 +366,18 @@ async def list_watch_in_progress(request: Request, limit: int = Query(250, le=50
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
            FROM video v
            INNER JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -406,6 +419,7 @@ async def list_videos_by_tags(
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
@@ -413,7 +427,11 @@ async def list_videos_by_tags(
            INNER JOIN video_tag vt ON vt.video_id = v.video_id AND vt.tag_id = ANY($1::int[])
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $2
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -426,6 +444,7 @@ async def list_videos_by_tags(
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
@@ -433,7 +452,11 @@ async def list_videos_by_tags(
            INNER JOIN video_tag vt ON vt.video_id = v.video_id AND vt.tag_id = ANY($1::int[])
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $2
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -441,6 +464,7 @@ async def list_videos_by_tags(
            GROUP BY v.video_id, v.provider_key, v.channel_id, v.title, v.upload_date, v.description,
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete, jq.job_queue_id, jq.job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent, uv.is_finished, uv.progress_seconds
            HAVING COUNT(DISTINCT vt.tag_id) = $3
@@ -473,13 +497,18 @@ async def search_videos(
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   uv.progress_percent AS watch_progress_percent, uv.is_finished AS watch_is_finished,
                   uv.progress_seconds AS watch_progress_seconds
            FROM video v
            LEFT JOIN user_video uv ON uv.video_id = v.video_id AND uv.user_id = $1
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true
@@ -1175,12 +1204,17 @@ async def get_video(video_id: int):
                   v.llm_description_1, v.thumbnail, v.file_path, v.transcode_path, v.download_date, v.duration,
                   v.record_created, v.status, jq.status_percent_complete AS status_percent_complete,
                   jq.job_queue_id AS pending_job_id, jq.job_type AS pending_job_type,
+                  jq.pending_job_status, jq.pending_job_target_server_instance_id, jq.pending_job_target_instance_name,
                   v.status_message, v.is_ignore, v.metadata_last_updated, v.nfo_last_written,
                   v.created_by_user_id, u.username AS created_by_username
            FROM video v
            LEFT JOIN app_user u ON v.created_by_user_id = u.user_id
            LEFT JOIN LATERAL (
-             SELECT j.status_percent_complete, j.job_queue_id, j.job_type FROM job_queue j
+             SELECT j.status_percent_complete, j.job_queue_id, j.job_type, j.status AS pending_job_status,
+                    j.target_server_instance_id AS pending_job_target_server_instance_id,
+                    si.display_name AS pending_job_target_instance_name
+             FROM job_queue j
+             LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
              WHERE j.video_id = v.video_id AND j.status IN ('new', 'running')
              ORDER BY j.last_update DESC NULLS LAST, j.job_queue_id DESC LIMIT 1
            ) jq ON true

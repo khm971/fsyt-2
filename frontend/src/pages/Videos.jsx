@@ -214,6 +214,20 @@ const JOB_TYPE_ICONS = {
 function getJobTypeIcon(jobType) {
   return JOB_TYPE_ICONS[jobType] ?? ListTodo;
 }
+
+/** Tooltip for pending-job icon: job id/type/status + target server instance name and id when known. */
+function formatPendingJobTooltip(job, instanceNameById) {
+  const line1 = `Job #${job.job_queue_id}: ${job.job_type}${job.status ? ` (${job.status})` : ""}`;
+  const tid = job.target_server_instance_id;
+  if (tid == null || tid === undefined) return line1;
+  const name =
+    (job.target_instance_name && String(job.target_instance_name).trim()) ||
+    (instanceNameById && instanceNameById[tid]) ||
+    "";
+  const line2 = name ? `Target instance: ${name} (ID ${tid})` : `Target instance ID: ${tid}`;
+  return `${line1}\n${line2}`;
+}
+
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
 import { Tooltip } from "../components/Tooltip";
@@ -261,7 +275,22 @@ export default function Videos({ setError }) {
   const [downloadTargetModal, setDownloadTargetModal] = useState(null);
   const [downloadTargetSelected, setDownloadTargetSelected] = useState("1");
   const [downloadBusyVideoId, setDownloadBusyVideoId] = useState(null);
+  const [instanceNameById, setInstanceNameById] = useState({});
   const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
+
+  useEffect(() => {
+    api.serverInstances
+      .list()
+      .then((rows) => {
+        const m = {};
+        for (const r of rows) {
+          m[r.server_instance_id] =
+            (r.display_name && String(r.display_name).trim()) || `Instance ${r.server_instance_id}`;
+        }
+        setInstanceNameById(m);
+      })
+      .catch(() => {});
+  }, []);
 
   const filterListParams = useMemo(() => filtersToParams(filters), [filters]);
 
@@ -662,17 +691,34 @@ export default function Videos({ setError }) {
               const status = override?.status ?? v.status;
               const percent = override?.status_percent_complete ?? v.status_percent_complete;
               const showProgress = ["downloading", "get_metadata_for_download", "post_download_processing", "getting_metadata", "llm_processing"].includes(status) && (percent != null || status === "downloading");
-              const pendingJobFromApi = v.pending_job_id != null && v.pending_job_type != null
-                ? { job_queue_id: v.pending_job_id, job_type: v.pending_job_type }
+              const pendingJobFromApi =
+                v.pending_job_id != null && v.pending_job_type != null
+                  ? {
+                      job_queue_id: v.pending_job_id,
+                      job_type: v.pending_job_type,
+                      status: v.pending_job_status,
+                      target_server_instance_id: v.pending_job_target_server_instance_id,
+                      target_instance_name: v.pending_job_target_instance_name,
+                    }
+                  : null;
+              const pendingJobFromWsRaw =
+                jobs
+                  .filter((j) => j.video_id === v.video_id)
+                  .sort((a, b) => {
+                    const aT = a.last_update ? new Date(a.last_update).getTime() : 0;
+                    const bT = b.last_update ? new Date(b.last_update).getTime() : 0;
+                    if (bT !== aT) return bT - aT;
+                    return (b.job_queue_id ?? 0) - (a.job_queue_id ?? 0);
+                  })[0] ?? null;
+              const pendingJobFromWs = pendingJobFromWsRaw
+                ? {
+                    job_queue_id: pendingJobFromWsRaw.job_queue_id,
+                    job_type: pendingJobFromWsRaw.job_type,
+                    status: pendingJobFromWsRaw.status,
+                    target_server_instance_id: pendingJobFromWsRaw.target_server_instance_id,
+                    target_instance_name: null,
+                  }
                 : null;
-              const pendingJobFromWs = jobs
-                .filter((j) => j.video_id === v.video_id)
-                .sort((a, b) => {
-                  const aT = a.last_update ? new Date(a.last_update).getTime() : 0;
-                  const bT = b.last_update ? new Date(b.last_update).getTime() : 0;
-                  if (bT !== aT) return bT - aT;
-                  return (b.job_queue_id ?? 0) - (a.job_queue_id ?? 0);
-                })[0] ?? null;
               const pendingJob = pendingJobFromApi ?? pendingJobFromWs;
               const StatusIconComponent = status ? (STATUS_ICONS[status] ?? HelpCircle) : HelpCircle;
               const statusTooltip = [formatStatus(status), v.status_message].filter(Boolean).join(" — ");
@@ -789,9 +835,9 @@ export default function Videos({ setError }) {
                       )}
                       {pendingJob && (() => {
                         const JobIconComponent = getJobTypeIcon(pendingJob.job_type);
-                        const jobTooltip = `Job #${pendingJob.job_queue_id}: ${pendingJob.job_type}${pendingJob.status ? ` (${pendingJob.status})` : ""}`;
+                        const jobTooltip = formatPendingJobTooltip(pendingJob, instanceNameById);
                         return (
-                          <Tooltip title={jobTooltip}>
+                          <Tooltip title={jobTooltip} wrap side="top">
                             <button
                               type="button"
                               onClick={() => setJobQueueIdForModal(pendingJob.job_queue_id)}

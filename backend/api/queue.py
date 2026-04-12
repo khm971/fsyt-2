@@ -21,6 +21,11 @@ from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
+# Resolved in SELECT via JOIN, or in INSERT/UPDATE RETURNING via correlated subquery on the new row.
+_TARGET_INSTANCE_NAME_SQL = (
+    "(SELECT display_name FROM server_instance WHERE server_instance_id = target_server_instance_id)"
+)
+
 
 def row_to_job(r) -> JobQueueResponse:
     return JobQueueResponse(
@@ -46,6 +51,7 @@ def row_to_job(r) -> JobQueueResponse:
         user_id=r.get("user_id"),
         username=r.get("username"),
         target_server_instance_id=int(r.get("target_server_instance_id") or 1),
+        target_server_instance_name=r.get("target_server_instance_name"),
         queue_all_target_all_downloaders=bool(r.get("queue_all_target_all_downloaders") or False),
     )
 
@@ -71,6 +77,7 @@ async def list_jobs(
     last_update_to: datetime | None = Query(None),
     run_after_from: datetime | None = Query(None),
     run_after_to: datetime | None = Query(None),
+    target_server_instance_id: int | None = Query(None, ge=1),
     limit: int = Query(500, le=500),
     offset: int = Query(0, ge=0),
     sort_by: str = Query("id", pattern="^(id|video_id|status|last_update|record_created|job_type|priority)$"),
@@ -141,6 +148,11 @@ async def list_jobs(
         where += f" AND run_after <= ${i}"
         params.append(run_after_to)
         i += 1
+    if target_server_instance_id is not None:
+        # Unqualified column: shared WHERE is used for COUNT (FROM job_queue) and list (FROM job_queue j …).
+        where += f" AND target_server_instance_id = ${i}"
+        params.append(target_server_instance_id)
+        i += 1
     total_row = await db.fetchrow(
         f"SELECT COUNT(*) AS total FROM job_queue {where}", *params
     )
@@ -153,9 +165,11 @@ async def list_jobs(
                   j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
                   j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
                   j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username,
-                  j.target_server_instance_id, j.queue_all_target_all_downloaders
+                  j.target_server_instance_id, j.queue_all_target_all_downloaders,
+                  si.display_name AS target_server_instance_name
            FROM job_queue j
            LEFT JOIN app_user u ON j.user_id = u.user_id
+           LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
            {where}
            {order_clause} LIMIT ${i} OFFSET ${i + 1}"""
     params.extend([limit, offset])
@@ -193,9 +207,11 @@ async def get_queue_summary():
                   j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
                   j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
                   j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username,
-                  j.target_server_instance_id, j.queue_all_target_all_downloaders
+                  j.target_server_instance_id, j.queue_all_target_all_downloaders,
+                  si.display_name AS target_server_instance_name
            FROM job_queue j
            LEFT JOIN app_user u ON j.user_id = u.user_id
+           LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
            WHERE j.status != 'new' AND j.status != 'done' AND j.status != 'cancelled'
            ORDER BY j.last_update DESC NULLS LAST LIMIT 20"""
     )
@@ -283,9 +299,11 @@ async def get_job(job_id: int):
                   j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
                   j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
                   j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username,
-                  j.target_server_instance_id, j.queue_all_target_all_downloaders
+                  j.target_server_instance_id, j.queue_all_target_all_downloaders,
+                  si.display_name AS target_server_instance_name
            FROM job_queue j
            LEFT JOIN app_user u ON j.user_id = u.user_id
+           LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
            WHERE j.job_queue_id = $1""",
         job_id,
     )
@@ -322,7 +340,7 @@ async def create_job(request: Request, body: JobQueueCreate):
     _validate_job_create(body)
     user_id = getattr(request.state, "user_id", None)
     row = await db.fetchrow(
-        """INSERT INTO job_queue (
+        f"""INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
             status, run_after, priority, scheduler_entry_id, user_id,
             target_server_instance_id, queue_all_target_all_downloaders
@@ -331,7 +349,8 @@ async def create_job(request: Request, body: JobQueueCreate):
                   parameter, extended_parameters, status, status_percent_complete, status_message,
                   last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                   run_after, priority, scheduler_entry_id, user_id,
-                  target_server_instance_id, queue_all_target_all_downloaders""",
+                  target_server_instance_id, queue_all_target_all_downloaders,
+                  {_TARGET_INSTANCE_NAME_SQL} AS target_server_instance_name""",
         body.job_type,
         body.video_id,
         body.channel_id,
@@ -391,8 +410,12 @@ async def update_job(job_id: int, body: JobQueueUpdate):
                       j.parameter, j.extended_parameters, j.status, j.status_percent_complete, j.status_message,
                       j.last_update, j.completed_flag, j.warning_flag, j.error_flag, j.acknowledge_flag,
                       j.run_after, j.priority, j.scheduler_entry_id, j.user_id, u.username,
-                      j.target_server_instance_id, j.queue_all_target_all_downloaders
-               FROM job_queue j LEFT JOIN app_user u ON j.user_id = u.user_id WHERE j.job_queue_id = $1""",
+                      j.target_server_instance_id, j.queue_all_target_all_downloaders,
+                      si.display_name AS target_server_instance_name
+               FROM job_queue j
+               LEFT JOIN app_user u ON j.user_id = u.user_id
+               LEFT JOIN server_instance si ON si.server_instance_id = j.target_server_instance_id
+               WHERE j.job_queue_id = $1""",
             job_id,
         ))
     params.append(job_id)
@@ -402,7 +425,8 @@ async def update_job(job_id: int, body: JobQueueUpdate):
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                      run_after, priority, scheduler_entry_id, user_id,
-                     target_server_instance_id, queue_all_target_all_downloaders""",
+                     target_server_instance_id, queue_all_target_all_downloaders,
+                     {_TARGET_INSTANCE_NAME_SQL} AS target_server_instance_name""",
         *params,
     )
     await broadcast_queue_update(updated_job_id=job_id)
@@ -412,12 +436,13 @@ async def update_job(job_id: int, body: JobQueueUpdate):
 @router.patch("/{job_id}/acknowledge", response_model=JobQueueResponse)
 async def acknowledge_job(request: Request, job_id: int):
     r = await db.fetchrow(
-        """UPDATE job_queue SET acknowledge_flag = TRUE WHERE job_queue_id = $1
+        f"""UPDATE job_queue SET acknowledge_flag = TRUE WHERE job_queue_id = $1
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                      run_after, priority, scheduler_entry_id, user_id,
-                     target_server_instance_id, queue_all_target_all_downloaders""",
+                     target_server_instance_id, queue_all_target_all_downloaders,
+                     {_TARGET_INSTANCE_NAME_SQL} AS target_server_instance_name""",
         job_id,
     )
     if not r:
@@ -436,12 +461,13 @@ async def acknowledge_job(request: Request, job_id: int):
 @router.patch("/{job_id}/unacknowledge", response_model=JobQueueResponse)
 async def unacknowledge_job(request: Request, job_id: int):
     r = await db.fetchrow(
-        """UPDATE job_queue SET acknowledge_flag = FALSE WHERE job_queue_id = $1
+        f"""UPDATE job_queue SET acknowledge_flag = FALSE WHERE job_queue_id = $1
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                      run_after, priority, scheduler_entry_id, user_id,
-                     target_server_instance_id, queue_all_target_all_downloaders""",
+                     target_server_instance_id, queue_all_target_all_downloaders,
+                     {_TARGET_INSTANCE_NAME_SQL} AS target_server_instance_name""",
         job_id,
     )
     if not r:
@@ -460,12 +486,13 @@ async def unacknowledge_job(request: Request, job_id: int):
 @router.post("/{job_id}/cancel", response_model=JobQueueResponse)
 async def cancel_job(request: Request, job_id: int):
     r = await db.fetchrow(
-        """UPDATE job_queue SET status = 'cancelled' WHERE job_queue_id = $1 AND status = 'new'
+        f"""UPDATE job_queue SET status = 'cancelled' WHERE job_queue_id = $1 AND status = 'new'
            RETURNING job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                      parameter, extended_parameters, status, status_percent_complete, status_message,
                      last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
                      run_after, priority, scheduler_entry_id, user_id,
-                     target_server_instance_id, queue_all_target_all_downloaders""",
+                     target_server_instance_id, queue_all_target_all_downloaders,
+                     {_TARGET_INSTANCE_NAME_SQL} AS target_server_instance_name""",
         job_id,
     )
     if not r:
