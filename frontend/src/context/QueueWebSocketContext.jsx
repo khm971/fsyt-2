@@ -24,6 +24,10 @@ function summaryFromMessage(msg, pendingList) {
     next_scheduled_job: msg.next_scheduled_job ?? null,
     last_scheduled_job: msg.last_scheduled_job ?? null,
     running_job: msg.running_job ?? (running[0] ? { job_queue_id: running[0].job_queue_id, job_type: running[0].job_type, status_percent_complete: running[0].status_percent_complete, video_id: running[0].video_id } : null),
+    instances_summary: Array.isArray(msg.instances_summary) ? msg.instances_summary : [],
+    this_server_instance_id: msg.this_server_instance_id ?? null,
+    duplicate_server_instance_id: Boolean(msg.duplicate_server_instance_id),
+    instance_queue_paused: Boolean(msg.instance_queue_paused),
   };
 }
 
@@ -92,12 +96,20 @@ export function QueueWebSocketProvider({ children }) {
           setQueueSummary(summaryFromMessage(msg, pendingJobs));
           setQueueUpdatedAt(Date.now());
           if (msg.heartbeat != null) setServerHeartbeat(msg.heartbeat);
-          if (msg.multiple_instances !== undefined) setMultipleInstances(Boolean(msg.multiple_instances));
+          if (msg.duplicate_server_instance_id !== undefined) {
+            setMultipleInstances(Boolean(msg.duplicate_server_instance_id));
+          } else if (msg.multiple_instances !== undefined) {
+            setMultipleInstances(Boolean(msg.multiple_instances));
+          }
           if (Array.isArray(msg.backend_instances)) setBackendInstances(msg.backend_instances);
           if (msg.queue_paused !== undefined) setQueuePausedFromServer(Boolean(msg.queue_paused));
         }
-        if (msg.type === "multi_instance_status" && msg.multiple_instances !== undefined) {
-          setMultipleInstances(Boolean(msg.multiple_instances));
+        if (msg.type === "multi_instance_status") {
+          if (msg.duplicate_server_instance_id !== undefined) {
+            setMultipleInstances(Boolean(msg.duplicate_server_instance_id));
+          } else if (msg.multiple_instances !== undefined) {
+            setMultipleInstances(Boolean(msg.multiple_instances));
+          }
           if (Array.isArray(msg.instances)) setBackendInstances(msg.instances);
         }
         if (msg.type === "heartbeat" && msg.value != null) {
@@ -177,6 +189,10 @@ export function QueueWebSocketProvider({ children }) {
             next_scheduled_job: summaryRes.next_scheduled_job ?? null,
             last_scheduled_job: summaryRes.last_scheduled_job ?? null,
             running_job: summaryRes.running?.length ? { job_queue_id: summaryRes.running[0].job_queue_id, job_type: summaryRes.running[0].job_type, status_percent_complete: summaryRes.running[0].status_percent_complete, video_id: summaryRes.running[0].video_id } : null,
+            instances_summary: summaryRes.instances_summary ?? [],
+            this_server_instance_id: summaryRes.this_server_instance_id ?? null,
+            duplicate_server_instance_id: Boolean(summaryRes.duplicate_server_instance_id),
+            instance_queue_paused: Boolean(summaryRes.instance_queue_paused),
           });
           setTotalCount(summaryRes.total_count ?? 0);
         }
@@ -229,6 +245,10 @@ export function QueueWebSocketProvider({ children }) {
             running_job: running.length
               ? { job_queue_id: running[0].job_queue_id, job_type: running[0].job_type, status_percent_complete: running[0].status_percent_complete, video_id: running[0].video_id }
               : null,
+            instances_summary: res.instances_summary ?? [],
+            this_server_instance_id: res.this_server_instance_id ?? null,
+            duplicate_server_instance_id: Boolean(res.duplicate_server_instance_id),
+            instance_queue_paused: Boolean(res.instance_queue_paused),
           });
           setTotalCount(res.total_count ?? 0);
           setQueueUpdatedAt(Date.now());

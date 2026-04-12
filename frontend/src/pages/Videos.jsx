@@ -257,6 +257,10 @@ export default function Videos({ setError }) {
   const [clearStatusConfirm, setClearStatusConfirm] = useState(null);
   const [clearStatusBusyVideoId, setClearStatusBusyVideoId] = useState(null);
   const [clearStatusDontAskAgain, setClearStatusDontAskAgain] = useState(false);
+  /** null | { videoId, choices } — pick target instance for download_video */
+  const [downloadTargetModal, setDownloadTargetModal] = useState(null);
+  const [downloadTargetSelected, setDownloadTargetSelected] = useState("1");
+  const [downloadBusyVideoId, setDownloadBusyVideoId] = useState(null);
   const { videoUpdatedAt, videoProgressOverrides, jobs } = useQueueWebSocket();
 
   const filterListParams = useMemo(() => filtersToParams(filters), [filters]);
@@ -357,15 +361,58 @@ export default function Videos({ setError }) {
 
   const openAdd = () => setShowAdd(true);
 
-  const queueVideoJob = async (videoId, jobType) => {
+  const queueVideoJob = async (videoId, jobType, targetServerInstanceId) => {
     try {
-      const j = await api.queue.create({ job_type: jobType, video_id: videoId, priority: 50 });
+      const body = { job_type: jobType, video_id: videoId, priority: 50 };
+      if (targetServerInstanceId != null) {
+        body.target_server_instance_id = targetServerInstanceId;
+      }
+      const j = await api.queue.create(body);
       setError(null);
       toast.addToast(`Job queued: ${jobType} (ID ${j.job_queue_id}, video ${videoId})`, "info");
     } catch (e) {
       setError(e.message);
       toast.addToast(e.message, "error");
     }
+  };
+
+  const handleDownloadClick = async (videoId) => {
+    setDownloadBusyVideoId(videoId);
+    try {
+      const list = await api.serverInstances.list();
+      const eligible = list.filter((s) => s.is_enabled && s.assign_download_jobs);
+      const active = eligible.filter((s) => s.is_running);
+
+      if (eligible.length === 0) {
+        toast.addToast(
+          "No server instances are enabled for downloads. Configure them in Admin → Server instances.",
+          "error"
+        );
+        return;
+      }
+
+      if (active.length === 1) {
+        await queueVideoJob(videoId, "download_video", active[0].server_instance_id);
+        return;
+      }
+
+      const choices = active.length > 1 ? active : eligible;
+      setDownloadTargetSelected(String(choices[0].server_instance_id));
+      setDownloadTargetModal({ videoId, choices });
+    } catch (e) {
+      setError(e.message);
+      toast.addToast(e.message, "error");
+    } finally {
+      setDownloadBusyVideoId(null);
+    }
+  };
+
+  const confirmDownloadTarget = async () => {
+    if (!downloadTargetModal) return;
+    const id = parseInt(downloadTargetSelected, 10);
+    const vid = downloadTargetModal.videoId;
+    setDownloadTargetModal(null);
+    await queueVideoJob(vid, "download_video", Number.isFinite(id) ? id : 1);
   };
 
   const performIgnoreToggle = async (videoId, isIgnore, { persistDontAskAgain = false } = {}) => {
@@ -393,7 +440,9 @@ export default function Videos({ setError }) {
   };
 
   const rowActionBusy = (videoId) =>
-    ignoreBusyVideoId === videoId || clearStatusBusyVideoId === videoId;
+    ignoreBusyVideoId === videoId ||
+    clearStatusBusyVideoId === videoId ||
+    downloadBusyVideoId === videoId;
 
   const performClearStatusToggle = async (videoId, { persistDontAskAgain = false } = {}) => {
     setClearStatusBusyVideoId(videoId);
@@ -844,8 +893,9 @@ export default function Videos({ setError }) {
                   <Tooltip title="Download">
                     <button
                       type="button"
-                      onClick={() => queueVideoJob(v.video_id, "download_video")}
-                      className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded"
+                      onClick={() => handleDownloadClick(v.video_id)}
+                      disabled={downloadBusyVideoId === v.video_id}
+                      className="p-1.5 text-gray-400 hover:text-blue-400 hover:bg-gray-700 rounded disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <Download className="w-4 h-4" />
                     </button>
@@ -1037,6 +1087,50 @@ export default function Videos({ setError }) {
                 className="rounded-lg bg-blue-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50"
               >
                 {clearStatusBusyVideoId != null ? "Please wait…" : "Clear status"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {downloadTargetModal && (
+        <Modal
+          title="Download — target server instance"
+          onClose={() => setDownloadTargetModal(null)}
+        >
+          <div className="space-y-4 text-sm">
+            <p className="text-gray-300">
+              Choose which worker should run this <span className="font-mono text-white">download_video</span> job
+              (video ID {downloadTargetModal.videoId}).
+            </p>
+            {downloadTargetModal.choices.length > 0 &&
+              !downloadTargetModal.choices.some((s) => s.is_running) && (
+                <p className="text-amber-400/90 text-xs">
+                  No instance has a recent heartbeat; you can still queue to a configured downloader.
+                </p>
+              )}
+            <label className="block">
+              <span className="text-gray-400 block mb-1">Server instance</span>
+              <select
+                value={downloadTargetSelected}
+                onChange={(e) => setDownloadTargetSelected(e.target.value)}
+                className="input w-full"
+              >
+                {downloadTargetModal.choices.map((s) => (
+                  <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                    {s.display_name} (ID {s.server_instance_id})
+                    {s.is_running ? " — running" : " — not running"}
+                    {!s.is_enabled ? " — disabled" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setDownloadTargetModal(null)} className="btn-secondary">
+                Cancel
+              </button>
+              <button type="button" onClick={() => void confirmDownloadTarget()} className="btn-primary">
+                Queue download
               </button>
             </div>
           </div>

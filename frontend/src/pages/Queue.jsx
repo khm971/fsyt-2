@@ -126,7 +126,16 @@ export default function Queue({ setError }) {
   const { jobs, totalCount, status: wsStatus, queueUpdatedAt, videoProgressOverrides, jobOverrides, refreshQueue } = useQueueWebSocket();
   const [control, setControl] = useState({});
   const [paused, setPaused] = useState(false);
-  const [addForm, setAddForm] = useState({ job_type: "get_metadata", video_id: "", channel_id: "", parameter: "", priority: 50 });
+  const [addForm, setAddForm] = useState({
+    job_type: "get_metadata",
+    video_id: "",
+    channel_id: "",
+    parameter: "",
+    priority: 50,
+    target_server_instance_id: "1",
+    queue_all_target_all_downloaders: false,
+  });
+  const [serverInstances, setServerInstances] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [jobQueueIdForModal, setJobQueueIdForModal] = useState(null);
   const [videoIdForDetails, setVideoIdForDetails] = useState(null);
@@ -209,6 +218,10 @@ export default function Queue({ setError }) {
   useEffect(() => {
     if (showAdd) {
       api.channels.list().then(setChannels).catch(() => setChannels([]));
+      api.serverInstances
+        .list()
+        .then(setServerInstances)
+        .catch(() => setServerInstances([]));
     }
   }, [showAdd]);
 
@@ -391,6 +404,10 @@ export default function Queue({ setError }) {
       if (paramConfig && addForm.parameter.trim()) {
         body.parameter = addForm.parameter.trim();
       }
+      body.target_server_instance_id = parseInt(addForm.target_server_instance_id, 10) || 1;
+      if (addForm.job_type === "queue_all_downloads") {
+        body.queue_all_target_all_downloaders = addForm.queue_all_target_all_downloaders;
+      }
       const j = await api.queue.create(body);
       setShowAdd(false);
       const extra = [];
@@ -498,6 +515,11 @@ export default function Queue({ setError }) {
               {renderSortTh("id", "ID")}
               {visibleColumns.includes("priority") && renderSortTh("priority", "Priority")}
               {renderSortTh("job_type", "Type", "asc")}
+              {visibleColumns.includes("target_server_instance_id") && (
+                <th className="px-4 py-3 font-medium" key="target_server_instance_id">
+                  Inst
+                </th>
+              )}
               {visibleColumns.includes("video_id") && renderSortTh("video_id", "Video ID")}
               {visibleColumns.includes("channel_id") && <th className="px-4 py-3 font-medium" key="channel_id">Channel ID</th>}
               {visibleColumns.includes("status") && renderSortTh("status", "Status", "asc")}
@@ -541,6 +563,16 @@ export default function Queue({ setError }) {
                     {j.job_type}
                   </button>
                 </td>
+                {visibleColumns.includes("target_server_instance_id") && (
+                  <td className="px-4 py-2 font-mono text-gray-400">
+                    {j.target_server_instance_id ?? 1}
+                    {j.queue_all_target_all_downloaders ? (
+                      <span className="text-cyan-500/90 text-xs ml-0.5" title="Target all downloaders">
+                        *
+                      </span>
+                    ) : null}
+                  </td>
+                )}
                 {visibleColumns.includes("video_id") && (
                   <td className="px-4 py-2 font-mono">
                     {j.video_id != null ? (
@@ -889,6 +921,35 @@ export default function Queue({ setError }) {
                     className="input"
                     placeholder={getParameterConfig(addForm.job_type).placeholder ?? ""}
                   />
+                </label>
+              )}
+              <label className="block">
+                <span className="text-gray-400 block mb-1">Target server instance</span>
+                <select
+                  value={String(addForm.target_server_instance_id)}
+                  onChange={(e) => setAddForm({ ...addForm, target_server_instance_id: e.target.value })}
+                  className="input"
+                >
+                  {serverInstances.map((s) => (
+                    <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                      {s.display_name} (ID {s.server_instance_id})
+                      {!s.is_enabled ? " — disabled" : ""}
+                      {s.is_running ? " — running" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {addForm.job_type === "queue_all_downloads" && (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={addForm.queue_all_target_all_downloaders}
+                    onChange={(e) =>
+                      setAddForm({ ...addForm, queue_all_target_all_downloaders: e.target.checked })
+                    }
+                    className="rounded border-gray-600 bg-gray-800"
+                  />
+                  <span className="text-gray-400">Target all downloaders</span>
                 </label>
               )}
               <label className="block">

@@ -271,12 +271,23 @@ export function LogEntryDetailsModal({
                   <td className="py-1.5 text-white">{entry.subsystem}</td>
                 </tr>
               )}
+              {entry.server_instance_id != null && (
+                <tr>
+                  <td className="py-1.5 pr-4 text-gray-400 align-top">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Server className="w-4 h-4 shrink-0 text-gray-500" />
+                      Server instance
+                    </span>
+                  </td>
+                  <td className="py-1.5 text-white font-mono">{entry.server_instance_id}</td>
+                </tr>
+              )}
               {entry.instance_id != null && (
                 <tr>
                   <td className="py-1.5 pr-4 text-gray-400 align-top">
                     <span className="inline-flex items-center gap-1.5">
                       <Cpu className="w-4 h-4 shrink-0 text-gray-500" />
-                      Instance ID
+                      Session (UUID)
                     </span>
                   </td>
                   <td className="py-1.5 text-white font-mono">{entry.instance_id}</td>

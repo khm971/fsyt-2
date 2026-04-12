@@ -13,6 +13,7 @@ const OPTIONAL_COLUMNS = [
   { key: "event_log_id", label: "Event ID", defaultVisible: false },
   { key: "username", label: "User", defaultVisible: false },
   { key: "subsystem", label: "Subsystem", defaultVisible: false },
+  { key: "server_instance_id", label: "Server inst.", defaultVisible: false },
 ];
 
 export const DEFAULT_VISIBLE_COLUMNS = OPTIONAL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);
@@ -35,6 +36,7 @@ const EMPTY_FILTERS = {
   job_id: "",
   video_id: "",
   channel_id: "",
+  server_instance_id: "",
   acknowledged: null,
   subsystem: "",
 };
@@ -186,6 +188,17 @@ export default function LogColumnFilterModal({
               />
             </label>
             <label className="block">
+              <span className="text-gray-400 block mb-1">Server instance ID</span>
+              <input
+                type="number"
+                min={1}
+                value={localFilters.server_instance_id}
+                onChange={(e) => updateFilter("server_instance_id", e.target.value)}
+                className="input w-full min-w-0"
+                placeholder="Any"
+              />
+            </label>
+            <label className="block">
               <span className="text-gray-400 block mb-1">Acknowledged</span>
               <select
                 value={localFilters.acknowledged === null ? "" : String(localFilters.acknowledged)}
@@ -243,6 +256,7 @@ export function hasLogActiveFilters(filters) {
     (filters.job_id !== "" && filters.job_id != null) ||
     (filters.video_id !== "" && filters.video_id != null) ||
     (filters.channel_id !== "" && filters.channel_id != null) ||
+    (filters.server_instance_id !== "" && filters.server_instance_id != null) ||
     filters.acknowledged !== null ||
     (filters.subsystem && filters.subsystem.trim())
   );
@@ -258,6 +272,11 @@ export function logFiltersToApiParams(filters) {
   if (Number.isFinite(vid)) p.video_id = vid;
   const cid = filters.channel_id !== "" && filters.channel_id != null ? parseInt(String(filters.channel_id), 10) : NaN;
   if (Number.isFinite(cid)) p.channel_id = cid;
+  const sid =
+    filters.server_instance_id !== "" && filters.server_instance_id != null
+      ? parseInt(String(filters.server_instance_id), 10)
+      : NaN;
+  if (Number.isFinite(sid)) p.server_instance_id = sid;
   if (filters.acknowledged === true || filters.acknowledged === false) p.acknowledged = filters.acknowledged;
   const sub = (filters.subsystem || "").trim();
   if (sub) p.subsystem = sub;

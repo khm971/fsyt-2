@@ -107,8 +107,8 @@ async def generate_missing_llm_descriptions(request: Request):
         if n == 0:
             raise HTTPException(400, "No videos match description = llm_description_1")
         job_row = await db.fetchrow(
-            """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id)
-               VALUES ('generate_missing_llm_descriptions', NULL, NULL, NULL, 'new', 50, $1)
+            """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id, target_server_instance_id)
+               VALUES ('generate_missing_llm_descriptions', NULL, NULL, NULL, 'new', 50, $1, 1)
                RETURNING job_queue_id""",
             user_id,
         )

@@ -40,6 +40,8 @@ def row_to_log(r):
         out["instance_id"] = str(r["instance_id"])
     if "hostname" in r and r["hostname"] is not None:
         out["hostname"] = r["hostname"]
+    if r.get("server_instance_id") is not None:
+        out["server_instance_id"] = int(r["server_instance_id"])
     return out
 
 
@@ -54,6 +56,7 @@ async def list_log(
     channel_id: int | None = Query(None, description="Filter by channel_id (context on entry)"),
     acknowledged: bool | None = Query(None),
     subsystem: str | None = Query(None),
+    server_instance_id: int | None = Query(None, description="Filter by server instance id"),
     sort_by: str = Query("time", pattern="^(time|job_id|video_id|channel_id|severity|message)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
 ):
@@ -90,6 +93,10 @@ async def list_log(
     if sub:
         conditions.append(f"e.subsystem = ${i}")
         params.append(sub)
+        i += 1
+    if server_instance_id is not None:
+        conditions.append(f"e.server_instance_id = ${i}")
+        params.append(server_instance_id)
         i += 1
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -130,7 +137,8 @@ async def list_log(
 
     params.extend([limit, offset])
     rows = await db.fetch(
-        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username
+        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username,
+                   e.server_instance_id
             FROM event_log e
             LEFT JOIN app_user u ON e.user_id = u.user_id
             {where}
@@ -172,7 +180,8 @@ async def recent_log(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit)
     rows = await db.fetch(
-        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username
+        f"""SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged, e.job_id, e.video_id, e.channel_id, e.subsystem, e.user_id, u.username,
+                   e.server_instance_id
             FROM event_log e
             LEFT JOIN app_user u ON e.user_id = u.user_id
             {where}
@@ -201,7 +210,8 @@ async def get_log_entry(event_log_id: int):
     """Get a single log entry by id with all fields (including instance_id, hostname, user_id, username)."""
     row = await db.fetchrow(
         """SELECT e.event_log_id, e.event_time, e.message, e.severity, e.acknowledged,
-                  e.job_id, e.video_id, e.channel_id, e.subsystem, e.instance_id, e.hostname, e.user_id, u.username
+                  e.job_id, e.video_id, e.channel_id, e.subsystem, e.instance_id, e.hostname, e.user_id, u.username,
+                  e.server_instance_id
            FROM event_log e
            LEFT JOIN app_user u ON e.user_id = u.user_id
            WHERE e.event_log_id = $1""",

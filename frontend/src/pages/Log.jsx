@@ -337,6 +337,9 @@ export default function Log({ setError }) {
                       </div>
                     </th>
                   )}
+                  {visibleColumns.includes("server_instance_id") && (
+                    <th className="px-4 py-2 text-gray-400">Inst</th>
+                  )}
                   {visibleColumns.includes("severity") && (
                     <th className="px-4 py-2">
                       <div className="flex items-center gap-1">
@@ -478,6 +481,11 @@ export default function Log({ setError }) {
                         ) : (
                           <span className="text-gray-500">—</span>
                         )}
+                      </td>
+                    )}
+                    {visibleColumns.includes("server_instance_id") && (
+                      <td className="px-4 py-2 font-mono text-xs text-gray-400">
+                        {e.server_instance_id != null ? e.server_instance_id : "—"}
                       </td>
                     )}
                     {visibleColumns.includes("severity") && (

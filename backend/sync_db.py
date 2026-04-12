@@ -112,10 +112,13 @@ def log_event_sync(
                     row = cur.fetchone()
                     if row and row[0] is not None:
                         channel_id = row[0]
+                from backend_instance_context import get_backend_instance
+
+                _, _, sid = get_backend_instance()
                 cur.execute(
-                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem, user_id)
-                       VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s)""",
-                    ((message or "")[:4096], severity, job_id, video_id, channel_id, subsystem, user_id),
+                    """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem, user_id, server_instance_id)
+                       VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)""",
+                    ((message or "")[:4096], severity, job_id, video_id, channel_id, subsystem, user_id, sid),
                 )
     except Exception:
         pass  # Don't let logging failures break the app

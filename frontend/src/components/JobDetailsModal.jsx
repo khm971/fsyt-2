@@ -208,6 +208,15 @@ export function JobDetailsModal({ jobId, onClose, setError, toast, onJobCanceled
                   </td>
                 </tr>
                 <tr>
+                  <td className="py-1.5 pr-4 text-gray-400 align-top">Target instance</td>
+                  <td className="py-1.5 text-white font-mono">
+                    {jobDetails.target_server_instance_id ?? 1}
+                    {jobDetails.queue_all_target_all_downloaders ? (
+                      <span className="text-cyan-400 ml-2 text-xs">(target all downloaders)</span>
+                    ) : null}
+                  </td>
+                </tr>
+                <tr>
                   <td className="py-1.5 pr-4 text-gray-400 align-top">
                     <span className="inline-flex items-center gap-1.5">
                       <ClipboardList className="w-4 h-4 shrink-0 text-gray-500" />

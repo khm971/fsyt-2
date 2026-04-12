@@ -5,6 +5,7 @@ from database import db
 from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_WARNING
 import db_helpers
 from job_processor import broadcast_queue_update
+from backend_instance_context import get_backend_instance
 
 CANCEL_REASON = "Cancelled: previous run did not complete (cleanup on startup)"
 
@@ -12,11 +13,17 @@ CANCEL_REASON = "Cancelled: previous run did not complete (cleanup on startup)"
 async def run_startup_cleanup() -> None:
     """Run after migrations, before job loop. Resets stuck jobs/videos and removes temp_downloads."""
     await log_event("Startup cleanup: starting", SEVERITY_DEBUG)
+    _, _, my_instance_id = get_backend_instance()
+    if my_instance_id is None:
+        await log_event("Startup cleanup: no server_instance_id in context; skipping job-queue cleanup", SEVERITY_WARNING)
+        my_instance_id = -1
 
-    # 1. Job queue: any status other than new, done, cancelled → cancelled with message and warning_flag
+    # 1. Job queue: any status other than new, done, cancelled → cancelled with message and warning_flag (this instance only)
     rows = await db.fetch(
         """SELECT job_queue_id, status, video_id, channel_id FROM job_queue
-           WHERE status NOT IN ('new', 'done', 'cancelled')"""
+           WHERE status NOT IN ('new', 'done', 'cancelled')
+             AND target_server_instance_id = $1""",
+        my_instance_id,
     )
     for r in rows:
         job_id = r["job_queue_id"]
@@ -38,7 +45,9 @@ async def run_startup_cleanup() -> None:
     # 1a. Job queue: reset status_percent_complete to 0 for jobs with percent 1–99 only (leave 0% and 100% unchanged)
     percent_rows = await db.fetch(
         """SELECT job_queue_id, job_type, video_id, channel_id, status, status_percent_complete, status_message
-           FROM job_queue WHERE status_percent_complete BETWEEN 1 AND 99"""
+           FROM job_queue WHERE status_percent_complete BETWEEN 1 AND 99
+             AND target_server_instance_id = $1""",
+        my_instance_id,
     )
     for r in percent_rows:
         job_id = r["job_queue_id"]
@@ -65,9 +74,13 @@ async def run_startup_cleanup() -> None:
         await broadcast_queue_update()
 
     # 1b. Job queue: cancel jobs whose run_after is more than one minute in the past
-    missed_count = await db_helpers.cancel_missed_future_jobs(
-        "Job cancelled during startup because the run after time has been missed"
-    )
+    if my_instance_id != -1:
+        missed_count = await db_helpers.cancel_missed_future_jobs(
+            "Job cancelled during startup because the run after time had been missed",
+            target_server_instance_id=my_instance_id,
+        )
+    else:
+        missed_count = 0
     if missed_count > 0:
         await log_event(
             f"Startup cleanup: cancelled {missed_count} job(s) whose run after time had been missed",

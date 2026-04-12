@@ -1,6 +1,6 @@
 """Async DB helpers for job processor (video, channel, job, control, charged_error)."""
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from database import db
 from log_helper import log_event, SEVERITY_WARNING
 from services.ytdlp_service import get_video_info
@@ -65,7 +65,12 @@ async def get_channel_by_provider_key(provider_key: str):
     )
 
 
-async def resolve_channel_for_video(provider_key: str, user_id: int | None = None) -> tuple[int | None, str | None]:
+async def resolve_channel_for_video(
+    provider_key: str,
+    user_id: int | None = None,
+    *,
+    target_server_instance_id: int = 1,
+) -> tuple[int | None, str | None]:
     """
     Resolve channel_id for a video from YouTube metadata.
     Finds or creates the channel; queues update_channel_info and download_channel_artwork for new channels.
@@ -82,8 +87,20 @@ async def resolve_channel_for_video(provider_key: str, user_id: int | None = Non
         return ch["channel_id"], None
     try:
         channel_id = await add_channel_by_handle_or_key(provider_key=chan_yt_id, created_by_user_id=user_id)
-        await add_job("update_channel_info", channel_id=channel_id, priority=50, user_id=user_id)
-        await add_job("download_channel_artwork", channel_id=channel_id, priority=50, user_id=user_id)
+        await add_job(
+            "update_channel_info",
+            channel_id=channel_id,
+            priority=50,
+            user_id=user_id,
+            target_server_instance_id=target_server_instance_id,
+        )
+        await add_job(
+            "download_channel_artwork",
+            channel_id=channel_id,
+            priority=50,
+            user_id=user_id,
+            target_server_instance_id=target_server_instance_id,
+        )
         return channel_id, None
     except Exception as e:
         return None, str(e)
@@ -245,12 +262,20 @@ async def cancel_job_on_startup(job_id: int, reason: str) -> None:
     )
 
 
-async def cancel_missed_future_jobs(reason: str) -> int:
+async def cancel_missed_future_jobs(reason: str, target_server_instance_id: int | None = None) -> int:
     """Cancel jobs with status='new' and run_after more than one minute in the past. Sets warning_flag and status_message. Returns count cancelled."""
-    rows = await db.fetch(
-        """SELECT job_queue_id, video_id, channel_id FROM job_queue
-           WHERE status = 'new' AND run_after IS NOT NULL AND run_after < NOW() - INTERVAL '1 minute'"""
-    )
+    if target_server_instance_id is not None:
+        rows = await db.fetch(
+            """SELECT job_queue_id, video_id, channel_id FROM job_queue
+               WHERE status = 'new' AND run_after IS NOT NULL AND run_after < NOW() - INTERVAL '1 minute'
+                 AND target_server_instance_id = $1""",
+            target_server_instance_id,
+        )
+    else:
+        rows = await db.fetch(
+            """SELECT job_queue_id, video_id, channel_id FROM job_queue
+               WHERE status = 'new' AND run_after IS NOT NULL AND run_after < NOW() - INTERVAL '1 minute'"""
+        )
     for r in rows:
         job_id = r["job_queue_id"]
         await cancel_job_on_startup(job_id, reason)
@@ -264,24 +289,54 @@ async def cancel_missed_future_jobs(reason: str) -> int:
     return len(rows)
 
 
-async def add_job(job_type: str, video_id: int = None, channel_id: int = None, parameter: str = None, priority: int = 50, user_id: int = None):
+def instance_queue_paused_control_key(server_instance_id: int) -> str:
+    return f"instance_queue_paused_{server_instance_id}"
+
+
+async def add_job(
+    job_type: str,
+    video_id: int = None,
+    channel_id: int = None,
+    parameter: str = None,
+    priority: int = 50,
+    user_id: int = None,
+    *,
+    target_server_instance_id: int = 1,
+):
     await db.execute(
-        """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id) VALUES ($1, $2, $3, $4, 'new', $5, $6)""",
+        """INSERT INTO job_queue (job_type, video_id, channel_id, parameter, status, priority, user_id, target_server_instance_id)
+           VALUES ($1, $2, $3, $4, 'new', $5, $6, $7)""",
         job_type,
         video_id,
         channel_id,
         parameter,
         priority,
         user_id,
+        target_server_instance_id,
     )
 
 
-async def get_furthest_scheduled_job():
+async def get_furthest_scheduled_job(
+    *,
+    target_server_instance_id: int | None = None,
+    job_type: str | None = None,
+):
     """Return the job_queue row with status='new' and the latest run_after, or None."""
+    where = "WHERE status = 'new' AND run_after IS NOT NULL"
+    params: list = []
+    i = 1
+    if target_server_instance_id is not None:
+        where += f" AND target_server_instance_id = ${i}"
+        params.append(target_server_instance_id)
+        i += 1
+    if job_type is not None:
+        where += f" AND job_type = ${i}"
+        params.append(job_type)
     return await db.fetchrow(
-        """SELECT job_queue_id, run_after FROM job_queue
-           WHERE status = 'new' AND run_after IS NOT NULL
-           ORDER BY run_after DESC LIMIT 1"""
+        f"""SELECT job_queue_id, run_after FROM job_queue
+           {where}
+           ORDER BY run_after DESC LIMIT 1""",
+        *params,
     )
 
 
@@ -296,13 +351,127 @@ async def get_pending_download_video_job_id(video_id: int) -> int | None:
     return row["job_queue_id"] if row else None
 
 
-async def add_video_job_to_queue(job_type: str, video_id: int, run_after=None, priority: int = 50, user_id: int = None):
+async def add_video_job_to_queue(
+    job_type: str,
+    video_id: int,
+    run_after=None,
+    priority: int = 50,
+    user_id: int = None,
+    *,
+    target_server_instance_id: int = 1,
+):
     await db.execute(
         """INSERT INTO job_queue (job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-           status, run_after, priority, user_id) VALUES ($1, $2, NULL, NULL, NULL, NULL, 'new', $3, $4, $5)""",
+           status, run_after, priority, user_id, target_server_instance_id)
+           VALUES ($1, $2, NULL, NULL, NULL, NULL, 'new', $3, $4, $5, $6)""",
         job_type,
         video_id,
         run_after,
         priority,
         user_id,
+        target_server_instance_id,
     )
+
+
+async def fetch_downloader_instance_ids() -> list[int]:
+    """Instances enabled for download job assignment (queue_all target-all)."""
+    rows = await db.fetch(
+        """SELECT server_instance_id FROM server_instance
+           WHERE is_enabled = TRUE AND assign_download_jobs = TRUE
+           ORDER BY server_instance_id"""
+    )
+    return [int(r["server_instance_id"]) for r in rows]
+
+
+async def fetch_server_instances_dashboard_summary() -> list[dict]:
+    """Per-instance health and queue stats for dashboard / WebSocket (cluster view)."""
+    dup_rows = await db.fetch(
+        """SELECT server_instance_id FROM backend_instances
+           WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+           GROUP BY server_instance_id
+           HAVING COUNT(*) > 1"""
+    )
+    duplicate_ids = {int(r["server_instance_id"]) for r in dup_rows}
+
+    cfgs = await db.fetch(
+        """SELECT server_instance_id, display_name, is_enabled, assign_download_jobs
+           FROM server_instance ORDER BY server_instance_id"""
+    )
+    hb_rows = await db.fetch(
+        """SELECT server_instance_id, MAX(last_heartbeat_utc) AS last_hb
+           FROM backend_instances GROUP BY server_instance_id"""
+    )
+    hb_map = {int(r["server_instance_id"]): r["last_hb"] for r in hb_rows}
+
+    counts_rows = await db.fetch(
+        """SELECT target_server_instance_id,
+                  count(*) FILTER (WHERE status = 'new') AS queued_new,
+                  count(*) FILTER (
+                      WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())
+                  ) AS runnable,
+                  count(*) FILTER (
+                      WHERE status = 'new' AND run_after IS NOT NULL AND run_after > NOW()
+                  ) AS scheduled_future
+           FROM job_queue GROUP BY target_server_instance_id"""
+    )
+    counts_map = {int(r["target_server_instance_id"]): r for r in counts_rows}
+
+    running_rows = await db.fetch(
+        """SELECT DISTINCT ON (target_server_instance_id)
+                  target_server_instance_id, job_queue_id, job_type, video_id,
+                  status_percent_complete, status_message
+           FROM job_queue
+           WHERE status NOT IN ('new', 'done', 'cancelled')
+           ORDER BY target_server_instance_id, last_update DESC NULLS LAST"""
+    )
+    running_map = {int(r["target_server_instance_id"]): r for r in running_rows}
+
+    now = datetime.now(timezone.utc)
+    out: list[dict] = []
+    for cfg in cfgs:
+        sid = int(cfg["server_instance_id"])
+        last_hb = hb_map.get(sid)
+        is_running = False
+        last_iso = None
+        if last_hb is not None:
+            last_iso = last_hb.isoformat() if hasattr(last_hb, "isoformat") else None
+            hb = last_hb
+            if hb.tzinfo is None:
+                hb = hb.replace(tzinfo=timezone.utc)
+            is_running = (now - hb).total_seconds() < 600
+
+        cr = counts_map.get(sid)
+        queued_new = int(cr["queued_new"] or 0) if cr else 0
+        runnable = int(cr["runnable"] or 0) if cr else 0
+        scheduled_future = int(cr["scheduled_future"] or 0) if cr else 0
+
+        rr = running_map.get(sid)
+        running_job = None
+        if rr:
+            running_job = {
+                "job_queue_id": rr["job_queue_id"],
+                "job_type": rr["job_type"] or "",
+                "video_id": rr["video_id"],
+                "status_percent_complete": rr["status_percent_complete"],
+                "status_message": rr["status_message"] or "",
+            }
+
+        paused = await get_control_bool(instance_queue_paused_control_key(sid))
+
+        out.append(
+            {
+                "server_instance_id": sid,
+                "display_name": cfg["display_name"] or "",
+                "is_enabled": bool(cfg["is_enabled"]),
+                "assign_download_jobs": bool(cfg["assign_download_jobs"]),
+                "is_running": is_running,
+                "last_heartbeat_utc": last_iso,
+                "duplicate_id_conflict": sid in duplicate_ids,
+                "instance_queue_paused": paused,
+                "queued_new": queued_new,
+                "runnable": runnable,
+                "scheduled_future": scheduled_future,
+                "running_job": running_job,
+            }
+        )
+    return out

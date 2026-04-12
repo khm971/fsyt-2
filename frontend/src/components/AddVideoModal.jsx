@@ -9,8 +9,10 @@ export function AddVideoModal({ open, onClose, setError, onSuccess }) {
     provider_key: "",
     queue_download: true,
     tag_needs_review: true,
+    target_server_instance_id: "1",
   });
   const [addSubmitting, setAddSubmitting] = useState(false);
+  const [serverInstances, setServerInstances] = useState([]);
 
   useEffect(() => {
     if (open) {
@@ -18,8 +20,13 @@ export function AddVideoModal({ open, onClose, setError, onSuccess }) {
         provider_key: "",
         queue_download: true,
         tag_needs_review: true,
+        target_server_instance_id: "1",
       });
       setAddSubmitting(false);
+      api.serverInstances
+        .list()
+        .then(setServerInstances)
+        .catch(() => setServerInstances([]));
     }
   }, [open]);
 
@@ -31,6 +38,7 @@ export function AddVideoModal({ open, onClose, setError, onSuccess }) {
         provider_key: addForm.provider_key,
         queue_download: addForm.queue_download,
         tag_needs_review: addForm.tag_needs_review !== false,
+        target_server_instance_id: parseInt(addForm.target_server_instance_id, 10) || 1,
       });
       onClose();
       onSuccess?.(v);
@@ -82,6 +90,25 @@ export function AddVideoModal({ open, onClose, setError, onSuccess }) {
             />
             <span className={addSubmitting ? "text-gray-500" : "text-gray-400"}>Queue download</span>
           </label>
+          {addForm.queue_download && (
+            <label className="block">
+              <span className="text-gray-400 block mb-1">Target server instance</span>
+              <select
+                value={String(addForm.target_server_instance_id)}
+                onChange={(e) => setAddForm({ ...addForm, target_server_instance_id: e.target.value })}
+                className="input w-full"
+                disabled={addSubmitting}
+              >
+                {serverInstances.map((s) => (
+                  <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                    {s.display_name} (ID {s.server_instance_id})
+                    {!s.is_enabled ? " — disabled" : ""}
+                    {s.is_running ? " — running" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="flex items-center gap-2">
             <input
               type="checkbox"

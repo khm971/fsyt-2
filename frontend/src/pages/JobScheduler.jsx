@@ -27,6 +27,8 @@ const emptyForm = () => ({
   parameter: "",
   priority: 50,
   is_enabled: true,
+  target_server_instance_id: "1",
+  queue_all_target_all_downloaders: false,
 });
 
 export default function JobScheduler({ setError }) {
@@ -46,6 +48,7 @@ export default function JobScheduler({ setError }) {
   const [runNowEntryId, setRunNowEntryId] = useState(null);
   const [channels, setChannels] = useState([]);
   const [videos, setVideos] = useState([]);
+  const [serverInstances, setServerInstances] = useState([]);
 
   const loadEntries = () => {
     api.scheduler
@@ -66,6 +69,10 @@ export default function JobScheduler({ setError }) {
         .list({ limit: 500 })
         .then((data) => setVideos(Array.isArray(data?.videos) ? data.videos : []))
         .catch(() => setVideos([]));
+      api.serverInstances
+        .list()
+        .then(setServerInstances)
+        .catch(() => setServerInstances([]));
     }
   }, [showForm, historyEntryId]);
 
@@ -101,6 +108,8 @@ export default function JobScheduler({ setError }) {
       parameter: entry.parameter ?? "",
       priority: entry.priority ?? 50,
       is_enabled: entry.is_enabled ?? true,
+      target_server_instance_id: String(entry.target_server_instance_id ?? 1),
+      queue_all_target_all_downloaders: !!entry.queue_all_target_all_downloaders,
     });
     setEditingId(entry.scheduler_entry_id);
     setShowForm(true);
@@ -131,6 +140,9 @@ export default function JobScheduler({ setError }) {
         parameter: form.parameter?.trim() || null,
         priority: form.priority,
         is_enabled: form.is_enabled,
+        target_server_instance_id: parseInt(form.target_server_instance_id, 10) || 1,
+        queue_all_target_all_downloaders:
+          form.job_type === "queue_all_downloads" && form.queue_all_target_all_downloaders,
       };
       if (editingId != null) {
         await api.scheduler.update(editingId, body);
@@ -401,6 +413,33 @@ export default function JobScheduler({ setError }) {
                   className="input w-full"
                   placeholder={getParameterConfig(form.job_type).placeholder ?? ""}
                 />
+              </label>
+            )}
+            <label className="block">
+              <span className="text-gray-400 block mb-1">Target server instance</span>
+              <select
+                value={String(form.target_server_instance_id)}
+                onChange={(e) => setForm({ ...form, target_server_instance_id: e.target.value })}
+                className="input w-full"
+              >
+                {serverInstances.map((s) => (
+                  <option key={s.server_instance_id} value={String(s.server_instance_id)}>
+                    {s.display_name} (ID {s.server_instance_id})
+                    {!s.is_enabled ? " — disabled" : ""}
+                    {s.is_running ? " — running" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {form.job_type === "queue_all_downloads" && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.queue_all_target_all_downloaders}
+                  onChange={(e) => setForm({ ...form, queue_all_target_all_downloaders: e.target.checked })}
+                  className="rounded border-gray-600"
+                />
+                <span className="text-gray-400">Target all downloaders (fan out across instances with downloader enabled)</span>
               </label>
             )}
             <label className="block">

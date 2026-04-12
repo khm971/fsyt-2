@@ -27,10 +27,10 @@ async def log_event(
             channel_id = await db.fetchval(
                 "SELECT channel_id FROM video WHERE video_id = $1", video_id
             )
-        instance_id, hostname = get_backend_instance()
+        instance_id, hostname, server_instance_id = get_backend_instance()
         await db.execute(
-            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem, user_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+            """INSERT INTO event_log (message, severity, job_id, video_id, channel_id, instance_id, hostname, subsystem, user_id, server_instance_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
             (message or "")[:4096],
             severity,
             job_id,
@@ -40,10 +40,13 @@ async def log_event(
             hostname or None,
             subsystem,
             user_id,
+            server_instance_id,
         )
         if severity >= SEVERITY_INFO:
             try:
-                await ws_manager.broadcast({"type": "log_event"})
+                await ws_manager.broadcast(
+                    {"type": "log_event", "server_instance_id": server_instance_id}
+                )
             except Exception:
                 pass
     except Exception:

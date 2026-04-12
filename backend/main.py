@@ -14,6 +14,37 @@ from dotenv import load_dotenv
 # Load .env from project root so OLLAMA_*, DATABASE_URL, etc. are set before any service imports
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+import sys
+
+
+def _require_positive_server_instance_id() -> int:
+    raw = os.environ.get("SERVER_INSTANCE_ID")
+    if raw is None or str(raw).strip() == "":
+        print(
+            "FATAL: SERVER_INSTANCE_ID must be set in the environment (.env). "
+            "Use a unique positive integer per running backend process (e.g. 1).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        n = int(str(raw).strip(), 10)
+    except ValueError:
+        print(
+            "FATAL: SERVER_INSTANCE_ID must be a positive integer.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if n < 1:
+        print(
+            "FATAL: SERVER_INSTANCE_ID must be a positive integer.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return n
+
+
+SERVER_INSTANCE_ID = _require_positive_server_instance_id()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -37,10 +68,13 @@ from api.scheduler import router as scheduler_router
 from api.information import router as information_router
 from api.jellyfin import router as jellyfin_router
 from api.users import router as users_router
+from api.server_instances import router as server_instances_router
 from session import SessionMiddleware, get_user_id_from_scope
 from scheduler_service import start_scheduler, shutdown_scheduler
 from startup_cleanup import run_startup_cleanup
-from backend_instance_context import set_backend_instance
+from backend_instance_context import configure_server_instance_id, set_backend_instance
+
+configure_server_instance_id(SERVER_INSTANCE_ID)
 
 
 def _get_host_info():
@@ -106,74 +140,84 @@ async def _transcode_progress_broadcast_loop():
         await asyncio.sleep(1.5)
 
 
-async def _backend_instance_heartbeat_loop(instance_id: uuid.UUID, hostname: str | None):
-    """Register this backend instance and broadcast multi-instance status; log on transitions."""
-    multiple_instances_previous: bool | None = None  # None = first run, set from initial count
+async def _backend_instance_heartbeat_loop(
+    session_instance_id: uuid.UUID,
+    hostname: str | None,
+    server_instance_id: int,
+):
+    """Register this backend session, detect duplicate numeric SERVER_INSTANCE_ID, pause only conflicting instances."""
+    previous_duplicate_numeric_ids: set[int] = set()
     while True:
         try:
             await db.execute(
-                """INSERT INTO backend_instances (instance_id, hostname, last_heartbeat_utc)
-                   VALUES ($1, $2, NOW())
+                """INSERT INTO backend_instances (instance_id, hostname, last_heartbeat_utc, server_instance_id)
+                   VALUES ($1, $2, NOW(), $3)
                    ON CONFLICT (instance_id) DO UPDATE SET
                      hostname = EXCLUDED.hostname,
-                     last_heartbeat_utc = NOW()""",
-                instance_id,
+                     last_heartbeat_utc = NOW(),
+                     server_instance_id = EXCLUDED.server_instance_id""",
+                session_instance_id,
                 hostname or "",
+                server_instance_id,
             )
             await db.execute(
                 """DELETE FROM backend_instances
                    WHERE last_heartbeat_utc < NOW() - INTERVAL '1 minute'"""
             )
-            count_row = await db.fetchrow(
-                """SELECT COUNT(*) AS n FROM backend_instances
-                   WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
+            dup_rows = await db.fetch(
+                """SELECT server_instance_id, COUNT(*) AS n FROM backend_instances
+                   WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+                   GROUP BY server_instance_id
+                   HAVING COUNT(*) > 1"""
             )
-            count = int(count_row["n"] or 0)
-            multiple_now = count > 1
+            duplicate_numeric_ids = {int(r["server_instance_id"]) for r in dup_rows}
 
-            if multiple_instances_previous is None:
-                multiple_instances_previous = multiple_now
+            newly = duplicate_numeric_ids - previous_duplicate_numeric_ids
+            cleared = previous_duplicate_numeric_ids - duplicate_numeric_ids
+            for sid in newly:
+                await set_control_value(f"instance_queue_paused_{sid}", "true")
                 await log_event(
-                    f"Backend instance registered (instance_id={instance_id}, hostname={hostname or 'unknown'})",
-                    SEVERITY_DEBUG,
+                    f"Duplicate backend processes detected for server_instance_id={sid}; queue paused for that instance only.",
+                    SEVERITY_WARNING,
                 )
-            else:
-                if multiple_now and not multiple_instances_previous:
-                    await log_event(
-                        f"Multiple backend instances detected ({count} instances). Please stop duplicate instances.",
-                        SEVERITY_WARNING,
-                    )
-                    await set_control_value("queue_paused", "true")
-                    await log_event(
-                        "Queue auto-paused because multiple backend instances were detected. Resume manually after stopping duplicate instances.",
-                        SEVERITY_WARNING,
-                    )
-                    await broadcast_queue_update()
-                elif not multiple_now and multiple_instances_previous:
-                    await log_event(
-                        "Multiple backend instance condition cleared; only one instance is running.",
-                        SEVERITY_NOTICE,
-                    )
-                multiple_instances_previous = multiple_now
+                await broadcast_queue_update()
+            for sid in cleared:
+                await set_control_value(f"instance_queue_paused_{sid}", "false")
+                await log_event(
+                    f"Duplicate server_instance_id={sid} condition cleared.",
+                    SEVERITY_NOTICE,
+                )
+                await broadcast_queue_update()
+            previous_duplicate_numeric_ids = duplicate_numeric_ids
+
+            my_duplicate = server_instance_id in duplicate_numeric_ids
 
             instances_rows = await db.fetch(
-                """SELECT instance_id, hostname, last_heartbeat_utc FROM backend_instances
+                """SELECT instance_id, server_instance_id, hostname, last_heartbeat_utc FROM backend_instances
                    WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
                    ORDER BY last_heartbeat_utc DESC"""
             )
             instances = [
                 {
                     "instance_id": str(r["instance_id"]),
+                    "server_instance_id": int(r["server_instance_id"]),
                     "hostname": r["hostname"] or "",
                     "last_heartbeat_utc": r["last_heartbeat_utc"].isoformat() if r["last_heartbeat_utc"] else None,
                 }
                 for r in instances_rows
             ]
-            await ws_manager.broadcast({
-                "type": "multi_instance_status",
-                "multiple_instances": multiple_now,
-                "instances": instances,
-            })
+            await ws_manager.broadcast(
+                {
+                    "type": "multi_instance_status",
+                    "duplicate_server_instance_id": my_duplicate,
+                    "duplicate_numeric_ids": sorted(duplicate_numeric_ids),
+                    "this_server_instance_id": server_instance_id,
+                    "instances": instances,
+                }
+            )
+            # Keep dashboard cluster view (instances_summary / is_running) in sync when other workers
+            # heartbeats change; multi_instance_status alone does not update queueSummary on the client.
+            await broadcast_queue_update()
         except Exception as e:
             await log_event(
                 f"Backend instance heartbeat error: {type(e).__name__}: {e}",
@@ -204,6 +248,18 @@ async def lifespan(app: FastAPI):
         )
         raise
     await log_event("Migrations complete", SEVERITY_DEBUG)
+    row_si = await db.fetchrow(
+        "SELECT server_instance_id FROM server_instance WHERE server_instance_id = $1",
+        SERVER_INSTANCE_ID,
+    )
+    if not row_si:
+        await db.disconnect()
+        print(
+            f"FATAL: No server_instance row for SERVER_INSTANCE_ID={SERVER_INSTANCE_ID}. "
+            "Add this instance in Admin → Server instances before starting.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     await run_startup_cleanup()
     await log_event("Starting job loop", SEVERITY_DEBUG)
     task = asyncio.create_task(run_job_loop())
@@ -212,11 +268,13 @@ async def lifespan(app: FastAPI):
     transcode_task = asyncio.create_task(_transcode_progress_broadcast_loop())
     await log_event("Starting scheduler", SEVERITY_DEBUG)
     await start_scheduler()
-    instance_id = uuid.uuid4()
+    session_instance_id = uuid.uuid4()
     hostname = host_info.get("hostname")
-    set_backend_instance(instance_id, hostname)
+    set_backend_instance(session_instance_id, hostname, SERVER_INSTANCE_ID)
     await log_event("Starting backend instance heartbeat", SEVERITY_DEBUG)
-    heartbeat_task = asyncio.create_task(_backend_instance_heartbeat_loop(instance_id, hostname))
+    heartbeat_task = asyncio.create_task(
+        _backend_instance_heartbeat_loop(session_instance_id, hostname, SERVER_INSTANCE_ID)
+    )
     await log_event("System startup complete", SEVERITY_INFO)
     try:
         yield
@@ -256,7 +314,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         try:
-            await db.execute("DELETE FROM backend_instances WHERE instance_id = $1", instance_id)
+            await db.execute("DELETE FROM backend_instances WHERE instance_id = $1", session_instance_id)
         except Exception as e:
             await log_event(
                 f"Could not delete backend instance on shutdown: {type(e).__name__}: {e}",
@@ -304,6 +362,7 @@ app.include_router(scheduler_router, prefix="/api")
 app.include_router(information_router, prefix="/api")
 app.include_router(jellyfin_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(server_instances_router, prefix="/api")
 
 
 @app.get("/health")

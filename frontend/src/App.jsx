@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { BrowserRouter, Routes, Route, NavLink, Link } from "react-router-dom";
 import { cn } from "./lib/utils";
 import {
   PlayCircle,
@@ -106,8 +106,15 @@ function AppLayout() {
           </div>
         )}
         {multipleInstances && (
-          <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm">
-            More than one backend is running. Please stop duplicate instances.
+          <div className="px-4 py-2 bg-red-900/30 text-red-300 text-sm flex flex-wrap items-center gap-2">
+            <span>
+              Duplicate server instance ID detected on this worker (two processes share the same{" "}
+              <code className="text-red-200">SERVER_INSTANCE_ID</code>). Queues for that ID are paused until only one
+              process remains.
+            </span>
+            <Link to="/admin/server-instances" className="text-cyan-400 hover:text-cyan-300 shrink-0">
+              Server instances
+            </Link>
           </div>
         )}
       </header>

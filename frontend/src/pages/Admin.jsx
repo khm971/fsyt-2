@@ -1,5 +1,5 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { Info, SlidersHorizontal, Wrench, CalendarClock, AlertCircle, Server } from "lucide-react";
+import { Info, SlidersHorizontal, Wrench, CalendarClock, AlertCircle, Server, Boxes } from "lucide-react";
 import { cn } from "../lib/utils";
 import ControlValuesPanel from "../components/ControlValuesPanel";
 import Information from "./Information";
@@ -7,6 +7,7 @@ import Maintenance from "./Maintenance";
 import JobScheduler from "./JobScheduler";
 import ChargedErrors from "./ChargedErrors";
 import Jellyfin from "./Jellyfin";
+import ServerInstances from "./ServerInstances";
 
 function AdminNavLink({ to, icon: Icon, children }) {
   return (
@@ -47,6 +48,9 @@ export default function Admin({ setError }) {
             <AdminNavLink to="/admin/information" icon={Info}>
               Information
             </AdminNavLink>
+            <AdminNavLink to="/admin/server-instances" icon={Boxes}>
+              Server instances
+            </AdminNavLink>
             <AdminNavLink to="/admin/job-scheduler" icon={CalendarClock}>
               Job Scheduler
             </AdminNavLink>
@@ -69,6 +73,7 @@ export default function Admin({ setError }) {
           <Routes>
             <Route index element={<Navigate to="information" replace />} />
             <Route path="information" element={<Information setError={setError} />} />
+            <Route path="server-instances" element={<ServerInstances setError={setError} />} />
             <Route path="job-scheduler" element={<JobScheduler setError={setError} />} />
             <Route path="maintenance" element={<Maintenance setError={setError} />} />
             <Route path="control-values" element={<ControlValuesPanel setError={setError} />} />

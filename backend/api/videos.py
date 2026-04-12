@@ -1233,7 +1233,11 @@ async def create_video(request: Request, body: VideoCreate):
     if existing:
         return await get_video(existing["video_id"])
     user_id = request.state.user_id
-    channel_id, err = await db_helpers.resolve_channel_for_video(provider_key, user_id=user_id)
+    channel_id, err = await db_helpers.resolve_channel_for_video(
+        provider_key,
+        user_id=user_id,
+        target_server_instance_id=body.target_server_instance_id,
+    )
     if not channel_id:
         raise HTTPException(400, err or "Could not determine channel from video")
     row = await db.fetchrow(
@@ -1250,11 +1254,12 @@ async def create_video(request: Request, body: VideoCreate):
     new_job_id = None
     if body.queue_download:
         job_row = await db.fetchrow(
-            """INSERT INTO job_queue (job_type, video_id, status, priority, user_id)
-               VALUES ('download_video', $1, 'new', 40, $2)
+            """INSERT INTO job_queue (job_type, video_id, status, priority, user_id, target_server_instance_id)
+               VALUES ('download_video', $1, 'new', 40, $2, $3)
                RETURNING job_queue_id""",
             row["video_id"],
             user_id,
+            body.target_server_instance_id,
         )
         if job_row:
             new_job_id = job_row["job_queue_id"]

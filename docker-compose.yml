@@ -13,6 +13,7 @@ services:
     container_name: fsyt2-backend
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:farstar@10.50.1.250/fsyt2}
+      - SERVER_INSTANCE_ID=${SERVER_INSTANCE_ID:-1}
       - MEDIA_ROOT=/media
       - TZ=${TZ:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}

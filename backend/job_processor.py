@@ -27,6 +27,7 @@ from services.llm_service import generate_llm_video_description
 from services.nfo_service import write_sidecar_nfo_for_library_video
 from services.tools import get_media_root, sanitize_string_for_disk_path
 from log_helper import log_event, SEVERITY_DEBUG, SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_ERROR
+from backend_instance_context import get_backend_instance
 
 
 async def _check_chargeable_and_lockout(error_code: str, message: str) -> None:
@@ -53,6 +54,19 @@ async def run_job_loop() -> None:
             if chargeable_errors_lockout:
                 was_lockout = True
                 continue
+            _, _, my_server_instance_id = get_backend_instance()
+            if my_server_instance_id is None:
+                continue
+            inst_row = await db.fetchrow(
+                "SELECT is_enabled FROM server_instance WHERE server_instance_id = $1",
+                my_server_instance_id,
+            )
+            if not inst_row or not inst_row["is_enabled"]:
+                continue
+            if await db_helpers.get_control_bool(
+                db_helpers.instance_queue_paused_control_key(my_server_instance_id)
+            ):
+                continue
             # Just resumed from pause and/or lockout: cancel any missed future jobs before processing
             if was_paused or was_lockout:
                 if was_paused and was_lockout:
@@ -77,11 +91,14 @@ async def run_job_loop() -> None:
             )
             await ws_manager.broadcast({"type": "heartbeat", "value": heartbeat_value})
             row = await db.fetchrow(
-                """SELECT job_queue_id, job_type, video_id, channel_id, parameter, run_after, user_id
+                """SELECT job_queue_id, job_type, video_id, channel_id, parameter, run_after, user_id,
+                          target_server_instance_id, queue_all_target_all_downloaders, extended_parameters
                    FROM job_queue
                    WHERE status = 'new' AND (run_after IS NULL OR run_after <= NOW())
+                     AND target_server_instance_id = $1
                    ORDER BY priority DESC NULLS LAST, job_queue_id ASC
-                   LIMIT 1"""
+                   LIMIT 1""",
+                my_server_instance_id,
             )
             if not row:
                 continue
@@ -118,7 +135,11 @@ async def run_job_loop() -> None:
                         else:
                             if v.get("channel_id") is None:
                                 await log_event(f"Job {job_id} video {row['video_id']}: resolving channel for video", SEVERITY_DEBUG, job_id=job_id, video_id=row["video_id"], channel_id=row.get("channel_id"), user_id=job_user_id)
-                                ch_id, err = await db_helpers.resolve_channel_for_video(v["provider_key"], user_id=job_user_id)
+                                ch_id, err = await db_helpers.resolve_channel_for_video(
+                                    v["provider_key"],
+                                    user_id=job_user_id,
+                                    target_server_instance_id=row["target_server_instance_id"],
+                                )
                                 if ch_id:
                                     await db_helpers.update_video_channel_id(row["video_id"], ch_id)
                                 else:
@@ -206,7 +227,12 @@ async def run_job_loop() -> None:
                         if not vid:
                             success, message, is_error = False, "Could not parse YouTube video ID from parameter", True
                         else:
-                            err = await _run_add_video_by_provider_key(vid, download_video=True, user_id=job_user_id)
+                            err = await _run_add_video_by_provider_key(
+                                vid,
+                                download_video=True,
+                                user_id=job_user_id,
+                                target_server_instance_id=int(row["target_server_instance_id"]),
+                            )
                             if err:
                                 success, message, is_warning = False, err, True
 
@@ -218,7 +244,12 @@ async def run_job_loop() -> None:
                         if not vid:
                             success, message, is_error = False, "Could not parse YouTube video ID from parameter", True
                         else:
-                            err = await _run_add_video_by_provider_key(vid, download_video=False, user_id=job_user_id)
+                            err = await _run_add_video_by_provider_key(
+                                vid,
+                                download_video=False,
+                                user_id=job_user_id,
+                                target_server_instance_id=int(row["target_server_instance_id"]),
+                            )
                         if err:
                             success, message, is_warning = False, err, True
 
@@ -229,7 +260,12 @@ async def run_job_loop() -> None:
                         success, message, is_warning = False, "transcode_video_for_ipad not implemented (Phase 3)", True
 
                 elif job_type == "queue_all_downloads":
-                    count = await _run_queue_all_downloads(job_id=job_id, user_id=job_user_id)
+                    count = await _run_queue_all_downloads(
+                        job_id=job_id,
+                        user_id=job_user_id,
+                        target_server_instance_id=int(row["target_server_instance_id"]),
+                        queue_all_target_all_downloaders=bool(row.get("queue_all_target_all_downloaders")),
+                    )
                     success = True
                     message = f"Queued {count} download_video jobs"
 
@@ -477,31 +513,64 @@ async def _run_fill_missing_metadata(max_videos: int, job_id: int | None = None,
             await asyncio.sleep(sleep_s)
 
 
-async def _run_queue_all_downloads(job_id: int | None = None, user_id: int | None = None) -> int:
+async def _run_queue_all_downloads(
+    job_id: int | None = None,
+    user_id: int | None = None,
+    *,
+    target_server_instance_id: int = 1,
+    queue_all_target_all_downloaders: bool = False,
+) -> int:
     """Queue download_video jobs for all videos missing metadata. Returns count of jobs queued."""
     min_delay = await db_helpers.get_control_int("download_scheduler_min_delay", 60)
     max_delay = await db_helpers.get_control_int("download_scheduler_max_delay", 300)
     priority = await db_helpers.get_control_int("download_scheduler_job_pri", 50)
     videos = await db_helpers.get_videos_missing_metadata(limit=None)
+
+    if queue_all_target_all_downloaders:
+        instance_ids = await db_helpers.fetch_downloader_instance_ids()
+        if not instance_ids:
+            await log_event(
+                f"Job {job_id or '?'}: queue_all_downloads target-all-downloaders: no enabled instances with assign_download_jobs",
+                SEVERITY_WARNING,
+                job_id=job_id,
+                user_id=user_id,
+            )
+            return 0
+    else:
+        instance_ids = [target_server_instance_id]
+
     await log_event(
-        f"Job {job_id or '?'}: starting queue_all_downloads (videos={len(videos)}, min_delay={min_delay}, max_delay={max_delay}, priority={priority})",
+        f"Job {job_id or '?'}: starting queue_all_downloads (videos={len(videos)}, instances={instance_ids}, "
+        f"target_all={queue_all_target_all_downloaders}, min_delay={min_delay}, max_delay={max_delay}, priority={priority})",
         SEVERITY_INFO,
         job_id=job_id,
         user_id=user_id,
     )
-    furthest = await db_helpers.get_furthest_scheduled_job()
-    furthest_time = furthest["run_after"] if furthest and furthest.get("run_after") else None
-    if furthest_time is not None and furthest_time.tzinfo is not None:
-        furthest_time = furthest_time.astimezone().replace(tzinfo=None)
+
+    def _norm_run_after(ft):
+        if ft is not None and hasattr(ft, "tzinfo") and ft.tzinfo is not None:
+            return ft.astimezone().replace(tzinfo=None)
+        return ft
+
     now = datetime.now()
-    if furthest_time is not None and furthest_time < now:
-        furthest_time = now
-    if furthest_time:
-        delay = random.randint(min_delay, max_delay)
-        next_scheduled = furthest_time + timedelta(seconds=delay)
-    else:
-        next_scheduled = now
+    next_scheduled: dict[int, datetime] = {}
+    for iid in instance_ids:
+        furthest = await db_helpers.get_furthest_scheduled_job(
+            target_server_instance_id=iid,
+            job_type="download_video",
+        )
+        furthest_time = furthest["run_after"] if furthest and furthest.get("run_after") else None
+        furthest_time = _norm_run_after(furthest_time)
+        if furthest_time is not None and furthest_time < now:
+            furthest_time = now
+        if furthest_time:
+            delay = random.randint(min_delay, max_delay)
+            next_scheduled[iid] = furthest_time + timedelta(seconds=delay)
+        else:
+            next_scheduled[iid] = now
+
     queued_count = 0
+    rr = 0
     for v in videos:
         video_id = v["video_id"]
         existing_job_id = await db_helpers.get_pending_download_video_job_id(video_id)
@@ -515,12 +584,23 @@ async def _run_queue_all_downloads(job_id: int | None = None, user_id: int | Non
                 user_id=user_id,
             )
             continue
+        if queue_all_target_all_downloaders:
+            tid = instance_ids[rr % len(instance_ids)]
+            rr += 1
+        else:
+            tid = target_server_instance_id
+        ns = next_scheduled[tid]
         await db_helpers.add_video_job_to_queue(
-            "download_video", video_id, run_after=next_scheduled, priority=priority, user_id=user_id
+            "download_video",
+            video_id,
+            run_after=ns,
+            priority=priority,
+            user_id=user_id,
+            target_server_instance_id=tid,
         )
         queued_count += 1
         delay = random.randint(min_delay, max_delay)
-        next_scheduled = next_scheduled + timedelta(seconds=delay)
+        next_scheduled[tid] = ns + timedelta(seconds=delay)
     await broadcast_queue_update()
     await log_event(
         f"Job {job_id or '?'}: queued {queued_count} download_video jobs",
@@ -610,7 +690,13 @@ async def _run_update_channel_info(channel_id: int) -> bool:
     return True
 
 
-async def _run_add_video_by_provider_key(provider_key: str, download_video: bool, user_id: int | None = None) -> str | None:
+async def _run_add_video_by_provider_key(
+    provider_key: str,
+    download_video: bool,
+    user_id: int | None = None,
+    *,
+    target_server_instance_id: int = 1,
+) -> str | None:
     existing = await db.fetchrow("SELECT video_id FROM video WHERE provider_key = $1", provider_key)
     if existing:
         return f"Video {provider_key} already exists"
@@ -626,8 +712,20 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
     else:
         try:
             channel_id = await db_helpers.add_channel_by_handle_or_key(provider_key=chan_yt_id, created_by_user_id=user_id)
-            await db_helpers.add_job("update_channel_info", channel_id=channel_id, priority=50, user_id=user_id)
-            await db_helpers.add_job("download_channel_artwork", channel_id=channel_id, priority=50, user_id=user_id)
+            await db_helpers.add_job(
+                "update_channel_info",
+                channel_id=channel_id,
+                priority=50,
+                user_id=user_id,
+                target_server_instance_id=target_server_instance_id,
+            )
+            await db_helpers.add_job(
+                "download_channel_artwork",
+                channel_id=channel_id,
+                priority=50,
+                user_id=user_id,
+                target_server_instance_id=target_server_instance_id,
+            )
         except Exception as e:
             await log_event(
                 f"Add video (create channel) failed: provider_key={chan_yt_id!r} error={type(e).__name__}: {e}",
@@ -640,7 +738,13 @@ async def _run_add_video_by_provider_key(provider_key: str, download_video: bool
     if not added:
         return "add_video_if_not_exist failed"
     if download_video:
-        await db_helpers.add_job("download_video", video_id=new_id, priority=40, user_id=user_id)
+        await db_helpers.add_job(
+            "download_video",
+            video_id=new_id,
+            priority=40,
+            user_id=user_id,
+            target_server_instance_id=target_server_instance_id,
+        )
     return None
 
 
@@ -686,6 +790,9 @@ def _job_row_to_dict(r) -> dict:
         "priority": r["priority"],
         "run_after": r["run_after"].isoformat() if r.get("run_after") else None,
         "scheduler_entry_id": r.get("scheduler_entry_id"),
+        "target_server_instance_id": int(r["target_server_instance_id"])
+        if r.get("target_server_instance_id") is not None
+        else 1,
     }
 
 
@@ -705,31 +812,45 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
     running_count = int(counts_row["running_count"] or 0)
     errors_count = int(counts_row["errors_count"] or 0)
     warnings_count = int(counts_row["warnings_count"] or 0)
-    multi_row = await db.fetchrow(
-        """SELECT COUNT(*) AS n FROM backend_instances
-           WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'"""
+    dup_rows = await db.fetch(
+        """SELECT server_instance_id FROM backend_instances
+           WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+           GROUP BY server_instance_id
+           HAVING COUNT(*) > 1"""
     )
-    multiple_instances = int(multi_row["n"] or 0) > 1
-    backend_instances_list = []
-    if multiple_instances:
-        instances_rows = await db.fetch(
-            """SELECT instance_id, hostname, last_heartbeat_utc FROM backend_instances
-               WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
-               ORDER BY last_heartbeat_utc DESC"""
+    duplicate_numeric_ids = {int(r["server_instance_id"]) for r in dup_rows}
+    _, _, this_server_instance_id = get_backend_instance()
+    duplicate_server_instance_id = (
+        this_server_instance_id is not None and this_server_instance_id in duplicate_numeric_ids
+    )
+    instance_queue_paused = False
+    if this_server_instance_id is not None:
+        instance_queue_paused = await db_helpers.get_control_bool(
+            db_helpers.instance_queue_paused_control_key(this_server_instance_id)
         )
-        backend_instances_list = [
-            {
-                "instance_id": str(r["instance_id"]),
-                "hostname": r["hostname"] or "",
-                "last_heartbeat_utc": r["last_heartbeat_utc"].isoformat() if r["last_heartbeat_utc"] else None,
-            }
-            for r in instances_rows
-        ]
+
+    instances_rows = await db.fetch(
+        """SELECT instance_id, server_instance_id, hostname, last_heartbeat_utc FROM backend_instances
+           WHERE last_heartbeat_utc > NOW() - INTERVAL '30 seconds'
+           ORDER BY last_heartbeat_utc DESC"""
+    )
+    backend_instances_list = [
+        {
+            "instance_id": str(r["instance_id"]),
+            "server_instance_id": int(r["server_instance_id"]),
+            "hostname": r["hostname"] or "",
+            "last_heartbeat_utc": r["last_heartbeat_utc"].isoformat() if r["last_heartbeat_utc"] else None,
+        }
+        for r in instances_rows
+    ]
+
+    instances_summary = await db_helpers.fetch_server_instances_dashboard_summary()
+
     # Pending jobs: new + running only (no done/cancelled), uncapped; minimal fields for dashboard and Videos page.
     pending_rows = await db.fetch(
         """SELECT job_queue_id, record_created, job_type, video_id, channel_id, status,
                   status_percent_complete, last_update, run_after, error_flag, warning_flag,
-                  acknowledge_flag, priority
+                  acknowledge_flag, priority, target_server_instance_id
            FROM job_queue
            WHERE status NOT IN ('done', 'cancelled')
            ORDER BY priority DESC NULLS LAST, job_queue_id ASC"""
@@ -749,6 +870,9 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
             "warning_flag": r["warning_flag"],
             "acknowledge_flag": r["acknowledge_flag"],
             "priority": r["priority"],
+            "target_server_instance_id": int(r["target_server_instance_id"])
+            if r.get("target_server_instance_id") is not None
+            else 1,
         }
         for r in pending_rows
     ]
@@ -817,8 +941,13 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
         "next_scheduled_job": next_scheduled_job,
         "last_scheduled_job": last_scheduled_job,
         "heartbeat": heartbeat,
-        "multiple_instances": multiple_instances,
+        "multiple_instances": duplicate_server_instance_id,
+        "duplicate_server_instance_id": duplicate_server_instance_id,
+        "duplicate_numeric_ids": sorted(duplicate_numeric_ids),
+        "this_server_instance_id": this_server_instance_id,
+        "instance_queue_paused": instance_queue_paused,
         "queue_paused": queue_paused,
+        "instances_summary": instances_summary,
     }
     if backend_instances_list:
         payload["backend_instances"] = backend_instances_list
@@ -828,7 +957,7 @@ async def broadcast_queue_update(updated_job_id: int | None = None) -> None:
             """SELECT job_queue_id, record_created, job_type, video_id, channel_id, other_target_id,
                       parameter, extended_parameters, status, status_percent_complete, status_message,
                       last_update, completed_flag, warning_flag, error_flag, acknowledge_flag,
-                      run_after, priority, scheduler_entry_id
+                      run_after, priority, scheduler_entry_id, target_server_instance_id
                FROM job_queue WHERE job_queue_id = $1""",
             updated_job_id,
         )

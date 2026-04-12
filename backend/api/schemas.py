@@ -103,6 +103,7 @@ class VideoCreate(BaseModel):
     provider_key: str
     queue_download: bool = False
     tag_needs_review: bool = True
+    target_server_instance_id: int = 1
 
 
 class VideoUpdate(BaseModel):
@@ -160,6 +161,8 @@ class JobQueueCreate(BaseModel):
     priority: int = 50
     scheduler_entry_id: Optional[int] = None
     user_id: Optional[int] = None  # Set by API from request.state, not sent by client
+    target_server_instance_id: int = 1
+    queue_all_target_all_downloaders: bool = False
 
 
 class JobQueueUpdate(BaseModel):
@@ -189,9 +192,34 @@ class JobQueueResponse(BaseModel):
     scheduler_entry_id: Optional[int] = None
     user_id: Optional[int] = None
     username: Optional[str] = None
+    target_server_instance_id: int = 1
+    queue_all_target_all_downloaders: bool = False
 
     class Config:
         from_attributes = True
+
+
+class DashboardRunningJobSummary(BaseModel):
+    job_queue_id: int
+    job_type: str = ""
+    video_id: Optional[int] = None
+    status_percent_complete: Optional[int] = None
+    status_message: str = ""
+
+
+class DashboardInstanceSummary(BaseModel):
+    server_instance_id: int
+    display_name: str = ""
+    is_enabled: bool = True
+    assign_download_jobs: bool = True
+    is_running: bool = False
+    last_heartbeat_utc: Optional[str] = None
+    duplicate_id_conflict: bool = False
+    instance_queue_paused: bool = False
+    queued_new: int = 0
+    runnable: int = 0
+    scheduled_future: int = 0
+    running_job: Optional[DashboardRunningJobSummary] = None
 
 
 class JobQueueListResponse(BaseModel):
@@ -222,6 +250,10 @@ class JobQueueSummaryResponse(BaseModel):
     scheduled_count: int = 0
     next_scheduled_job: Optional[JobQueueScheduledSummary] = None
     last_scheduled_job: Optional[JobQueueScheduledSummary] = None
+    instances_summary: list[DashboardInstanceSummary] = []
+    this_server_instance_id: Optional[int] = None
+    duplicate_server_instance_id: bool = False
+    instance_queue_paused: bool = False
 
 
 # ----- Scheduler entry -----
@@ -236,6 +268,8 @@ class SchedulerEntryBase(BaseModel):
     extended_parameters: Optional[str] = None
     priority: int = 50
     is_enabled: bool = True
+    target_server_instance_id: int = 1
+    queue_all_target_all_downloaders: bool = False
 
 
 class SchedulerEntryCreate(SchedulerEntryBase):
@@ -253,6 +287,8 @@ class SchedulerEntryUpdate(BaseModel):
     extended_parameters: Optional[str] = None
     priority: Optional[int] = None
     is_enabled: Optional[bool] = None
+    target_server_instance_id: Optional[int] = None
+    queue_all_target_all_downloaders: Optional[bool] = None
 
 
 class SchedulerEntryResponse(SchedulerEntryBase):
@@ -261,6 +297,35 @@ class SchedulerEntryResponse(SchedulerEntryBase):
     next_run_at: Optional[datetime] = None
     record_created: Optional[datetime] = None
     record_updated: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ----- Server instance (multi-instance admin) -----
+class ServerInstanceCreate(BaseModel):
+    server_instance_id: int
+    display_name: str
+    is_enabled: bool = True
+    assign_download_jobs: bool = True
+
+
+class ServerInstanceUpdate(BaseModel):
+    display_name: Optional[str] = None
+    is_enabled: Optional[bool] = None
+    assign_download_jobs: Optional[bool] = None
+
+
+class ServerInstanceResponse(BaseModel):
+    server_instance_id: int
+    display_name: str
+    is_enabled: bool
+    assign_download_jobs: bool
+    record_created: Optional[datetime] = None
+    record_updated: Optional[datetime] = None
+    is_running: bool = False
+    last_heartbeat_utc: Optional[str] = None
+    duplicate_id_conflict: bool = False
 
     class Config:
         from_attributes = True

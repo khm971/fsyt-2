@@ -32,6 +32,8 @@ def _row_to_response(r) -> SchedulerEntryResponse:
         extended_parameters=r["extended_parameters"],
         priority=r["priority"],
         is_enabled=r["is_enabled"],
+        target_server_instance_id=int(r.get("target_server_instance_id") or 1),
+        queue_all_target_all_downloaders=bool(r.get("queue_all_target_all_downloaders") or False),
         last_run_at=r["last_run_at"],
         next_run_at=r["next_run_at"],
         record_created=r["record_created"],
@@ -45,6 +47,7 @@ async def list_entries():
     rows = await db.fetch(
         """SELECT scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
                   other_target_id, parameter, extended_parameters, priority, is_enabled,
+                  target_server_instance_id, queue_all_target_all_downloaders,
                   last_run_at, next_run_at, record_created, record_updated
            FROM scheduler_entry ORDER BY scheduler_entry_id ASC"""
     )
@@ -57,6 +60,7 @@ async def get_entry(entry_id: int):
     r = await db.fetchrow(
         """SELECT scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
                   other_target_id, parameter, extended_parameters, priority, is_enabled,
+                  target_server_instance_id, queue_all_target_all_downloaders,
                   last_run_at, next_run_at, record_created, record_updated
            FROM scheduler_entry WHERE scheduler_entry_id = $1""",
         entry_id,
@@ -74,10 +78,12 @@ async def create_entry(request: Request, body: SchedulerEntryCreate):
     r = await db.fetchrow(
         """INSERT INTO scheduler_entry (
             name, job_type, cron_expression, video_id, channel_id, other_target_id,
-            parameter, extended_parameters, priority, is_enabled, next_run_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            parameter, extended_parameters, priority, is_enabled, next_run_at,
+            target_server_instance_id, queue_all_target_all_downloaders
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
                   other_target_id, parameter, extended_parameters, priority, is_enabled,
+                  target_server_instance_id, queue_all_target_all_downloaders,
                   last_run_at, next_run_at, record_created, record_updated""",
         body.name,
         body.job_type,
@@ -90,6 +96,8 @@ async def create_entry(request: Request, body: SchedulerEntryCreate):
         body.priority,
         body.is_enabled,
         next_run if body.is_enabled else None,
+        body.target_server_instance_id,
+        body.queue_all_target_all_downloaders,
     )
     user_id = getattr(request.state, "user_id", None)
     await log_event(
@@ -106,7 +114,8 @@ async def update_entry(request: Request, entry_id: int, body: SchedulerEntryUpda
     """Update a scheduler entry. Validates cron if provided. Triggers scheduler reload."""
     existing = await db.fetchrow(
         """SELECT scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
-                  other_target_id, parameter, extended_parameters, priority, is_enabled
+                  other_target_id, parameter, extended_parameters, priority, is_enabled,
+                  target_server_instance_id, queue_all_target_all_downloaders
            FROM scheduler_entry WHERE scheduler_entry_id = $1""",
         entry_id,
     )
@@ -122,6 +131,7 @@ async def update_entry(request: Request, entry_id: int, body: SchedulerEntryUpda
         r = await db.fetchrow(
             """SELECT scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
                       other_target_id, parameter, extended_parameters, priority, is_enabled,
+                      target_server_instance_id, queue_all_target_all_downloaders,
                       last_run_at, next_run_at, record_created, record_updated
                FROM scheduler_entry WHERE scheduler_entry_id = $1""",
             entry_id,
@@ -135,14 +145,27 @@ async def update_entry(request: Request, entry_id: int, body: SchedulerEntryUpda
     parameter = updates.get("parameter", existing["parameter"])
     extended_parameters = updates.get("extended_parameters", existing["extended_parameters"])
     priority = updates.get("priority", existing["priority"])
+    target_server_instance_id = (
+        updates["target_server_instance_id"]
+        if "target_server_instance_id" in updates
+        else existing["target_server_instance_id"]
+    )
+    queue_all_target_all_downloaders = (
+        updates["queue_all_target_all_downloaders"]
+        if "queue_all_target_all_downloaders" in updates
+        else existing["queue_all_target_all_downloaders"]
+    )
     r = await db.fetchrow(
         """UPDATE scheduler_entry SET
             name = $1, job_type = $2, cron_expression = $3, video_id = $4, channel_id = $5,
             other_target_id = $6, parameter = $7, extended_parameters = $8, priority = $9,
-            is_enabled = $10, next_run_at = $11, record_updated = NOW()
-           WHERE scheduler_entry_id = $12
+            is_enabled = $10, next_run_at = $11,
+            target_server_instance_id = $12, queue_all_target_all_downloaders = $13,
+            record_updated = NOW()
+           WHERE scheduler_entry_id = $14
            RETURNING scheduler_entry_id, name, job_type, cron_expression, video_id, channel_id,
                      other_target_id, parameter, extended_parameters, priority, is_enabled,
+                     target_server_instance_id, queue_all_target_all_downloaders,
                      last_run_at, next_run_at, record_created, record_updated""",
         name,
         job_type,
@@ -155,6 +178,8 @@ async def update_entry(request: Request, entry_id: int, body: SchedulerEntryUpda
         priority,
         is_enabled,
         next_run,
+        target_server_instance_id,
+        queue_all_target_all_downloaders,
         entry_id,
     )
     user_id = getattr(request.state, "user_id", None)

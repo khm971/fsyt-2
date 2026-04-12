@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { useQueueWebSocket } from "../hooks/useQueueWebSocket";
 import { useToast } from "../context/ToastContext";
 import { cn, formatSmartTime, formatHeartbeatTime, formatRelativeTime, formatScheduledRunAfter, formatDateTimeWithSeconds } from "../lib/utils";
-import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play, Plus } from "lucide-react";
+import { Cpu, Film, ScrollText, Users, ListTodo, PlayCircle, Clock, AlertCircle, AlertTriangle, CalendarClock, Pause, Play, Plus, Server } from "lucide-react";
 import { Tooltip } from "../components/Tooltip";
 import { JobDetailsModal } from "../components/JobDetailsModal";
 import { VideoDetailsModal } from "../components/VideoDetailsModal";
@@ -122,6 +122,10 @@ export default function Dashboard({ setError }) {
     nextScheduledJob?.run_after != null ? new Date(nextScheduledJob.run_after).getTime() : null;
   const lastScheduledRunAfter =
     lastScheduledJob?.run_after != null ? new Date(lastScheduledJob.run_after).getTime() : null;
+  const instancesSummary = queueSummary?.instances_summary ?? [];
+  const thisServerInstanceId = queueSummary?.this_server_instance_id;
+  const duplicateThisInstance = queueSummary?.duplicate_server_instance_id ?? multipleInstances;
+  const instanceQueuePaused = queueSummary?.instance_queue_paused ?? false;
   useEffect(() => {
     if (queueSummary == null && refreshSummary && !queueRefreshTriggeredRef.current) {
       queueRefreshTriggeredRef.current = true;
@@ -305,10 +309,17 @@ export default function Dashboard({ setError }) {
           </div>
           <div className="text-white text-sm space-y-1.5">
             <div className="flex items-center gap-2 flex-wrap">
+              {thisServerInstanceId != null && (
+                <span className="text-gray-400 text-xs font-mono border border-gray-700 rounded px-1.5 py-0.5">
+                  Connected: instance {thisServerInstanceId}
+                </span>
+              )}
               {chargeableErrorsLockout ? (
                 <span className="text-red-400 font-medium">Locked out</span>
               ) : queuePaused ? (
-                <span className="text-yellow-400 font-medium">Paused</span>
+                <span className="text-yellow-400 font-medium">Paused (global)</span>
+              ) : instanceQueuePaused ? (
+                <span className="text-yellow-400 font-medium">Paused (duplicate ID)</span>
               ) : (
                 "Running"
               )}
@@ -337,17 +348,21 @@ export default function Dashboard({ setError }) {
                 </>
               )}
             </div>
-            {multipleInstances && (
-              <div className="flex items-center gap-1.5 text-red-400 font-medium">
+            {duplicateThisInstance && (
+              <div className="flex items-center gap-1.5 text-red-400 font-medium flex-wrap">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                Multiple backends detected
+                Duplicate process for this instance ID
+                <Link to="/admin/server-instances" className="text-cyan-400 hover:text-cyan-300 text-sm font-normal">
+                  Manage instances
+                </Link>
               </div>
             )}
-            {multipleInstances && backendInstances.length > 0 ? (
+            {duplicateThisInstance && backendInstances.length > 0 ? (
               <div className="font-mono text-xs space-y-0.5 text-red-200/90">
                 {backendInstances.map((inst, i) => (
                   <div key={inst.instance_id ?? i}>
-                    {inst.hostname || inst.instance_id || "Unknown"}: {formatHeartbeatTime(inst.last_heartbeat_utc)}{" "}
+                    ID {inst.server_instance_id ?? "?"} {inst.hostname ? `· ${inst.hostname}` : ""}:{" "}
+                    {formatHeartbeatTime(inst.last_heartbeat_utc)}{" "}
                     <span className="text-red-300/80">
                       ({inst.last_heartbeat_utc ? formatRelativeTime(inst.last_heartbeat_utc, now) : "—"})
                     </span>
@@ -418,6 +433,70 @@ export default function Dashboard({ setError }) {
           </div>
         </div>
       </div>
+
+      {instancesSummary.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2 text-gray-400 text-sm">
+              <Server className="w-4 h-4" />
+              Server instances (cluster)
+            </div>
+            <Link to="/admin/server-instances" className="text-xs text-cyan-400 hover:text-cyan-300">
+              Configure
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {instancesSummary.map((inst) => (
+              <div
+                key={inst.server_instance_id}
+                className="rounded-lg border border-gray-800 bg-gray-950/50 p-3 text-sm space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-white font-medium truncate" title={inst.display_name}>
+                    {inst.display_name}
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 w-2 h-2 rounded-full",
+                      inst.is_running ? "bg-green-500" : "bg-gray-600"
+                    )}
+                    title={inst.is_running ? "Heartbeat within 10 min" : "No recent heartbeat"}
+                  />
+                </div>
+                <div className="text-gray-500 text-xs font-mono">ID {inst.server_instance_id}</div>
+                <div className="text-gray-400 text-xs flex flex-wrap gap-x-2 gap-y-0.5">
+                  <span>Queued: {inst.queued_new}</span>
+                  <span>Runnable: {inst.runnable}</span>
+                  <span>Scheduled: {inst.scheduled_future}</span>
+                </div>
+                {inst.running_job && (
+                  <div className="text-xs text-gray-300 truncate" title={inst.running_job.job_type}>
+                    Running: {inst.running_job.job_type}
+                    {inst.running_job.video_id != null ? ` · v${inst.running_job.video_id}` : ""}
+                    {inst.running_job.status_percent_complete != null
+                      ? ` (${inst.running_job.status_percent_complete}%)`
+                      : ""}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-1.5 text-xs">
+                  {!inst.is_enabled && (
+                    <span className="text-amber-400/90">Disabled</span>
+                  )}
+                  {!inst.assign_download_jobs && (
+                    <span className="text-gray-500">No downloader</span>
+                  )}
+                  {inst.duplicate_id_conflict && (
+                    <span className="text-red-400">Duplicate</span>
+                  )}
+                  {inst.instance_queue_paused && (
+                    <span className="text-yellow-400">Paused</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">

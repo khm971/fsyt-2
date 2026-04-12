@@ -197,6 +197,12 @@ export const api = {
     get: () => apiFetch("/information"),
   },
 
+  serverInstances: {
+    list: () => apiFetch("/server-instances"),
+    create: (body) => apiFetch("/server-instances", { method: "POST", body: JSON.stringify(body) }),
+    update: (id, body) => apiFetch(`/server-instances/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  },
+
   scheduler: {
     list: () => apiFetch("/scheduler"),
     get: (id) => apiFetch(`/scheduler/${id}`),
@@ -253,6 +259,7 @@ export const api = {
       if (msg) q.set("message_contains", msg);
       if (params.job_id != null) q.set("job_id", params.job_id);
       if (params.channel_id != null) q.set("channel_id", params.channel_id);
+      if (params.server_instance_id != null) q.set("server_instance_id", params.server_instance_id);
       if (params.acknowledged === true || params.acknowledged === false) q.set("acknowledged", String(params.acknowledged));
       const sub = params.subsystem != null ? String(params.subsystem).trim() : "";
       if (sub) q.set("subsystem", sub);

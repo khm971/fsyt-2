@@ -12,6 +12,7 @@ const OPTIONAL_COLUMNS = [
   { key: "run_after", label: "Run after", defaultVisible: false },
   { key: "parameter", label: "Parameter", defaultVisible: false },
   { key: "scheduler_entry_id", label: "Scheduler entry", defaultVisible: false },
+  { key: "target_server_instance_id", label: "Target instance", defaultVisible: true },
 ];
 
 export const DEFAULT_VISIBLE_COLUMNS = OPTIONAL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);

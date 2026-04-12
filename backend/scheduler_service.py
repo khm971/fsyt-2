@@ -32,8 +32,9 @@ async def _enqueue_job_from_entry(entry) -> dict:
     row = await db.fetchrow(
         """INSERT INTO job_queue (
             job_type, video_id, channel_id, other_target_id, parameter, extended_parameters,
-            status, priority, scheduler_entry_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8)
+            status, priority, scheduler_entry_id,
+            target_server_instance_id, queue_all_target_all_downloaders
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'new', $7, $8, $9, $10)
         RETURNING job_queue_id, video_id, channel_id""",
         entry["job_type"],
         entry["video_id"],
@@ -43,6 +44,8 @@ async def _enqueue_job_from_entry(entry) -> dict:
         entry["extended_parameters"],
         entry["priority"],
         sid,
+        entry["target_server_instance_id"],
+        entry["queue_all_target_all_downloaders"],
     )
     return dict(row)
 
@@ -51,7 +54,8 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
     """Called when a scheduler entry's cron fires: enqueue one job and update last/next run."""
     entry = await db.fetchrow(
         """SELECT scheduler_entry_id, name, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, priority, cron_expression
+                  parameter, extended_parameters, priority, cron_expression,
+                  target_server_instance_id, queue_all_target_all_downloaders
            FROM scheduler_entry WHERE scheduler_entry_id = $1 AND is_enabled = TRUE""",
         scheduler_entry_id,
     )
@@ -60,6 +64,12 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
             f"Scheduler fire error: entry id={scheduler_entry_id} (entry not found or disabled)",
             SEVERITY_ERROR,
         )
+        return
+    locked = await db.fetchval(
+        "SELECT pg_try_advisory_lock(872014, $1::int)",
+        scheduler_entry_id,
+    )
+    if not locked:
         return
     name = entry["name"]
     try:
@@ -89,6 +99,8 @@ async def _fire_entry(scheduler_entry_id: int) -> None:
             SEVERITY_ERROR,
         )
         raise
+    finally:
+        await db.execute("SELECT pg_advisory_unlock(872014, $1::int)", scheduler_entry_id)
 
 
 async def run_entry_now(scheduler_entry_id: int) -> dict | None:
@@ -97,7 +109,8 @@ async def run_entry_now(scheduler_entry_id: int) -> dict | None:
     Returns dict with job_queue_id and name on success, None if entry not found."""
     entry = await db.fetchrow(
         """SELECT scheduler_entry_id, name, job_type, video_id, channel_id, other_target_id,
-                  parameter, extended_parameters, priority
+                  parameter, extended_parameters, priority,
+                  target_server_instance_id, queue_all_target_all_downloaders
            FROM scheduler_entry WHERE scheduler_entry_id = $1""",
         scheduler_entry_id,
     )
